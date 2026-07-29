@@ -185,7 +185,7 @@ function getRecaptchaVerifier(){
     size:'invisible',
     callback:()=>{},
     'expired-callback':()=>resetRecaptcha()
-  });
+  },wbCarnetFirebaseApp);
   return recaptchaVerifier;
 }
 function resetRecaptcha(){

@@ -11,9 +11,17 @@ const FIREBASE_CONFIG = {
 /* URL publique prévue pour le nouveau dépôt GitHub Pages. */
 const WB_CARNET_PUBLIC_URL = "https://tdyfa.github.io/wheelerBrothers-carnet/";
 
-if(!firebase.apps.length){
-  firebase.initializeApp(FIREBASE_CONFIG);
+/*
+   Instance Firebase nommée : elle isole la session WB Carnet de la session
+   WheelerBrothers Atelier, même si les deux PWA sont hébergées sur tdyfa.github.io.
+*/
+const WB_CARNET_FIREBASE_APP_NAME = 'wbCarnet';
+let wbCarnetFirebaseApp;
+try{
+  wbCarnetFirebaseApp = firebase.app(WB_CARNET_FIREBASE_APP_NAME);
+}catch(_error){
+  wbCarnetFirebaseApp = firebase.initializeApp(FIREBASE_CONFIG, WB_CARNET_FIREBASE_APP_NAME);
 }
-const db = firebase.firestore();
-const auth = firebase.auth();
+const db = wbCarnetFirebaseApp.firestore();
+const auth = wbCarnetFirebaseApp.auth();
 auth.languageCode = 'fr';
