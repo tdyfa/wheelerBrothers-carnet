@@ -72,3 +72,8 @@ Une invitation acceptée par un utilisateur déjà propriétaire ou administrate
 ## Version 5 — correction de session
 
 La session Firebase Authentication de WB Carnet utilise désormais une instance Firebase nommée `wbCarnet`. Elle ne remplace plus la session e-mail/mot de passe de WheelerBrothers Atelier, même si les deux applications sont servies sous le même domaine GitHub Pages.
+
+
+## Version 5.1
+
+Corrige l'étiquette de version qui repassait à 4 après le chargement de `app.js` et force le renouvellement des ressources mises en cache.
