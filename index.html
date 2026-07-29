@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>WheelerBrothers Carnet</title>
+  <meta name="description" content="Carnet d'entretien automobile partagé WheelerBrothers">
+  <meta name="theme-color" content="#0f1216">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="WB Carnet">
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <link rel="stylesheet" href="styles.css">
+
+  <script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+  <script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+  <script defer src="firebase-config.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <header class="app-bar">
+    <button class="icon-btn hidden" id="backButton" type="button" aria-label="Retour">‹</button>
+    <img src="report-cover-logo.png" alt="WheelerBrothers" class="app-logo">
+    <div class="app-title-wrap">
+      <div class="app-title">WheelerBrothers Carnet</div>
+      <div class="app-subtitle" id="appSubtitle">Version 1</div>
+    </div>
+    <button class="icon-btn hidden" id="accountButton" type="button" aria-label="Compte">●</button>
+  </header>
+
+  <main id="app" class="app-shell" aria-live="polite">
+    <section class="screen centered-screen">
+      <div class="card loading-card">
+        <div class="spinner" aria-hidden="true"></div>
+        <p>Chargement de WB Carnet…</p>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <div id="recaptcha-container" aria-hidden="true"></div>
+
+  <noscript>JavaScript doit être activé pour utiliser WB Carnet.</noscript>
+</body>
+</html>
