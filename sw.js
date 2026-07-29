@@ -1,4 +1,4 @@
-const CACHE_NAME = 'wb-carnet-v1';
+const CACHE_NAME = 'wb-carnet-v4';
 const ASSETS = [
   './',
   './index.html',

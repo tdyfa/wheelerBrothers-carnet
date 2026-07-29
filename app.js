@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = 1;
+const APP_VERSION = 4;
 const INVITATION_TTL_MS = 24 * 60 * 60 * 1000;
 const C = Object.freeze({
   users: 'wbCarnetUsers',
@@ -102,6 +102,7 @@ function inviteStatusLabel(status){
 }
 function serverTimestamp(){ return firebase.firestore.FieldValue.serverTimestamp(); }
 function timestampFromMillis(ms){ return firebase.firestore.Timestamp.fromMillis(ms); }
+function userRef(uid){ return db.collection(C.users).doc(uid); }
 function vehicleRef(id){ return db.collection(C.vehicles).doc(id); }
 function memberRef(vehicleId, uid){ return vehicleRef(vehicleId).collection('members').doc(uid); }
 function userVehicleRef(uid, vehicleId){ return db.collection(C.users).doc(uid).collection('vehicles').doc(vehicleId); }
@@ -141,19 +142,40 @@ function openModal(title, bodyHtml){
 }
 function closeModal(){ document.getElementById('modalBackdrop')?.remove(); }
 
-async function ensureUserProfile(user){
-  if(!user) return;
-  const ref = db.collection(C.users).doc(user.uid);
+async function ensureAuthorizedProfile(user){
+  if(!user) return null;
+  const ref = userRef(user.uid);
   const snap = await ref.get();
-  const data = {
+  const existing = snap.exists ? snap.data() : null;
+  if(existing?.status === 'active'){
+    await ref.set({
+      uid:user.uid,
+      phone:user.phoneNumber || existing.phone || '',
+      updatedAt:serverTimestamp(),
+      lastSeenAt:serverTimestamp()
+    },{merge:true});
+    state.profile = {...existing,uid:user.uid,phone:user.phoneNumber || existing.phone || ''};
+    return state.profile;
+  }
+
+  /* Migration sûre des comptes déjà créés avant le passage en accès sur invitation :
+     un compte n'est autorisé que s'il possède déjà un accès actif à un véhicule. */
+  const pointerSnap = await ref.collection('vehicles').where('status','==','active').limit(1).get();
+  if(pointerSnap.empty) return null;
+  const vehicleId = pointerSnap.docs[0].id;
+  const profile = {
     uid:user.uid,
     phone:user.phoneNumber || '',
+    status:'active',
+    role:'user',
+    authorizationVehicleId:vehicleId,
+    authorizedAt:serverTimestamp(),
     updatedAt:serverTimestamp(),
     lastSeenAt:serverTimestamp()
   };
-  if(!snap.exists) data.createdAt = serverTimestamp();
-  await ref.set(data,{merge:true});
-  state.profile = {...(snap.exists?snap.data():{}),...data};
+  await ref.set(profile,{merge:true});
+  state.profile = profile;
+  return profile;
 }
 
 let recaptchaVerifier = null;
@@ -200,20 +222,25 @@ async function confirmSmsCode(code){
   if(!state.confirmationResult) throw new Error('Demande d’abord un nouveau code.');
   try{
     const credential = await state.confirmationResult.confirm(String(code || '').trim());
-    await ensureUserProfile(credential.user);
     state.user = credential.user;
     resetRecaptcha();
     if(state.authMode === 'invite' && state.inviteToken){
       await acceptInvitation(state.inviteToken,credential.user);
-    }else{
-      await showVehicleList();
+      return;
     }
+    const profile = await ensureAuthorizedProfile(credential.user);
+    if(!profile){
+      await auth.signOut();
+      renderLogin('Ce numéro ne dispose pas encore d’une invitation activée.');
+      return;
+    }
+    await showVehicleList();
   }catch(error){
     throw new Error(firebaseAuthMessage(error));
   }
 }
 
-function renderLogin(){
+function renderLogin(accessMessage=''){
   clearSubscriptions();
   state.route = 'login';
   setHeader({account:false});
@@ -222,8 +249,8 @@ function renderLogin(){
       <div style="width:min(430px,100%);">
         <div class="brand-lockup"><img src="report-cover-logo.png" alt="WheelerBrothers"><h1>WB Carnet</h1><p>Le carnet d’entretien partagé de vos véhicules.</p></div>
         <div class="card">
-          <div class="card-head"><h2>Connexion</h2><p>Votre numéro sert d’identifiant. Un code de vérification vous sera envoyé par SMS.</p></div>
-          <form class="card-body" id="loginForm">
+          <div class="card-head"><h2>Accès sur invitation</h2><p>WB Carnet est réservé aux personnes déjà invitées. Votre numéro sert ensuite d’identifiant.</p></div>
+          <form class="card-body" id="loginForm">${accessMessage?`<div class="notice warn">${escapeHtml(accessMessage)}</div>`:'<div class="notice">Vous devez avoir activé une première invitation avant de pouvoir vous connecter directement.</div>'}
             <div class="field"><label for="loginPhone">Numéro de téléphone</label><input type="tel" id="loginPhone" inputmode="tel" autocomplete="tel" placeholder="06 12 34 56 78" required></div>
             <div class="help">En demandant le code, vous acceptez que ce numéro soit utilisé par Firebase/Google pour la vérification et la prévention des abus.</div><button class="btn block" id="loginSend" type="submit">Recevoir mon code</button>
             <div class="status" id="loginStatus"></div>
@@ -367,20 +394,43 @@ async function acceptInvitation(token,user){
     const vehicle = vehicleSnap.data();
     targetVehicleId = invite.vehicleId;
     targetPlateKey = vehicle.plateKey || invite.plateKey || '';
+
+    /* Une invitation ne doit jamais rétrograder le propriétaire ou l'administrateur
+       déjà présent sur la fiche, notamment lorsqu'il teste son propre lien. */
+    const existingMemberSnap = await transaction.get(memberRef(targetVehicleId,user.uid));
+    const existingPointerSnap = await transaction.get(userVehicleRef(user.uid,targetVehicleId));
+    const existingMemberRole = existingMemberSnap.exists ? existingMemberSnap.data().role : '';
+    const existingPointerRole = existingPointerSnap.exists ? existingPointerSnap.data().role : '';
+    const preservedRole = isManagerRole(existingMemberRole)
+      ? existingMemberRole
+      : (isManagerRole(existingPointerRole) ? existingPointerRole : 'member');
+
     transaction.set(memberRef(targetVehicleId,user.uid),{
-      uid:user.uid,phone:user.phoneNumber,role:'member',status:'active',
+      uid:user.uid,phone:user.phoneNumber,role:preservedRole,status:'active',
       invitedBy:invite.createdBy || '',invitationToken:token,
       activatedAt:serverTimestamp(),updatedAt:serverTimestamp()
     },{merge:true});
     transaction.set(userVehicleRef(user.uid,targetVehicleId),{
-      uid:user.uid,vehicleId:targetVehicleId,role:'member',status:'active',
+      uid:user.uid,vehicleId:targetVehicleId,role:preservedRole,status:'active',
       plateKey:targetPlateKey,addedAt:serverTimestamp(),updatedAt:serverTimestamp()
+    },{merge:true});
+    transaction.set(userRef(user.uid),{
+      uid:user.uid,
+      phone:user.phoneNumber,
+      status:'active',
+      role:'user',
+      authorizationVehicleId:targetVehicleId,
+      invitationToken:token,
+      authorizedAt:serverTimestamp(),
+      createdAt:serverTimestamp(),
+      updatedAt:serverTimestamp(),
+      lastSeenAt:serverTimestamp()
     },{merge:true});
     transaction.update(inviteRef,{
       status:'used',usedByUid:user.uid,usedAt:serverTimestamp(),updatedAt:serverTimestamp()
     });
   });
-  await ensureUserProfile(user);
+  await ensureAuthorizedProfile(user);
   if(targetVehicleId && targetPlateKey){
     try{ await mergeOwnedSamePlateVehicles(targetVehicleId,targetPlateKey); }
     catch(error){ console.warn('Fusion différée',error); showToast('Accès activé. La fusion pourra être relancée plus tard.'); }
@@ -503,7 +553,7 @@ function renderVehicleList(){
   appEl.innerHTML=`
     <section class="screen">
       <div class="page-head"><div><h1>Mes véhicules</h1><p>Vos carnets personnels et les véhicules partagés avec vous.</p></div><button class="btn" id="addVehicle" type="button">+ Ajouter un véhicule</button></div>
-      ${state.userVehicles.length ? `<div class="vehicle-grid">${cards}</div>` : `<div class="card empty-state"><h2>Aucun véhicule</h2><p>Créez votre première fiche véhicule ou ouvrez un lien d’invitation WheelerBrothers.</p><button class="btn" id="addVehicleEmpty" type="button">Ajouter un véhicule</button></div>`}
+      ${state.userVehicles.length ? `<div class="vehicle-grid">${cards}</div>` : `<div class="card empty-state"><h2>Aucun véhicule</h2><p>Créez votre première fiche véhicule. Votre compte a été autorisé par une invitation WheelerBrothers.</p><button class="btn" id="addVehicleEmpty" type="button">Ajouter un véhicule</button></div>`}
     </section>`;
   document.getElementById('addVehicle')?.addEventListener('click',()=>renderVehicleForm());
   document.getElementById('addVehicleEmpty')?.addEventListener('click',()=>renderVehicleForm());
@@ -597,7 +647,7 @@ function renderVehicleDetail(){
     <section class="screen">
       <article class="card">
         <div class="vehicle-profile"><div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap"><div><h1>${escapeHtml(v.model || 'Véhicule')}</h1><span class="vehicle-plate">${escapeHtml(displayPlate(v.plate))}</span></div><span class="badge ${v.origin==='atelier'?'ok':'muted'}">${v.origin==='atelier'?'Fiche WheelerBrothers':'Fiche personnelle'}</span></div><div class="profile-facts" style="margin-top:15px"><span><strong>Propriétaire :</strong> ${escapeHtml(v.ownerName || 'Non renseigné')}</span><span><strong>Motorisation :</strong> ${escapeHtml(v.engine || 'Non renseignée')}</span></div></div>
-        <div class="profile-actions"><button class="btn" id="addOperation" type="button">+ Ajouter une opération</button>${canEditVehicle?'<button class="btn ghost" id="editVehicle" type="button">Modifier la fiche</button>':''}${isManager?'<button class="btn ghost" id="manageAccess" type="button">Gérer les accès</button>':''}</div>
+        <div class="profile-actions"><button class="btn" id="addOperation" type="button">+ Ajouter une opération</button>${canEditVehicle?'<button class="btn ghost" id="editVehicle" type="button">Modifier la fiche</button>':''}${v.origin==='personal' && v.createdBy===auth.currentUser.uid?'<button class="btn danger" id="deleteVehicle" type="button">Supprimer le véhicule</button>':''}</div>
       </article>
       <div class="section-title">Historique des opérations</div>
       ${state.operations.length?`<div class="operation-list">${opsHtml}</div>`:`<div class="card empty-state"><h2>Aucune opération</h2><p>Ajoutez la première intervention réalisée sur ce véhicule.</p><button class="btn" id="addOperationEmpty" type="button">Ajouter une opération</button></div>`}
@@ -606,11 +656,82 @@ function renderVehicleDetail(){
   document.getElementById('addOperationEmpty')?.addEventListener('click',()=>renderOperationForm());
   document.getElementById('editVehicle')?.addEventListener('click',()=>renderVehicleForm(v));
   document.getElementById('manageAccess')?.addEventListener('click',()=>showAccessManager());
+  document.getElementById('deleteVehicle')?.addEventListener('click',deleteCurrentVehicle);
   appEl.querySelectorAll('[data-edit-op]').forEach(button=>button.addEventListener('click',()=>{
     const op=state.operations.find(item=>item.id===button.dataset.editOp && item._vehicleId===button.dataset.sourceVehicle);
     if(op) renderOperationForm(op);
   }));
   appEl.querySelectorAll('[data-delete-op]').forEach(button=>button.addEventListener('click',()=>deleteOperation(button.dataset.sourceVehicle,button.dataset.deleteOp)));
+}
+
+
+async function commitWriteChunks(writes, chunkSize=350){
+  for(let start=0; start<writes.length; start+=chunkSize){
+    const batch=db.batch();
+    for(const applyWrite of writes.slice(start,start+chunkSize)) applyWrite(batch);
+    await batch.commit();
+  }
+}
+
+async function deleteCurrentVehicle(){
+  const user=auth.currentUser;
+  const vehicle=state.currentVehicle;
+  if(!user || !vehicle) return;
+  if(vehicle.origin!=='personal' || vehicle.createdBy!==user.uid){
+    showToast('Seul le créateur peut supprimer cette fiche personnelle.');
+    return;
+  }
+  const expectedPlate=normalizePlate(vehicle.plate);
+  const answer=prompt(`Cette action retirera le véhicule et son historique à toutes les personnes autorisées.\n\nPour confirmer, saisissez l’immatriculation ${displayPlate(vehicle.plate)} :`);
+  if(answer===null) return;
+  if(normalizePlate(answer)!==expectedPlate){
+    showToast('Immatriculation incorrecte. Suppression annulée.');
+    return;
+  }
+
+  clearSubscriptions();
+  setLoading('Suppression du véhicule…');
+  try{
+    const [membersSnap,invitationsSnap]=await Promise.all([
+      vehicleRef(vehicle.id).collection('members').get(),
+      db.collection(C.invitations).where('vehicleId','==',vehicle.id).get()
+    ]);
+
+    const preliminaryWrites=[];
+    for(const inviteDoc of invitationsSnap.docs){
+      preliminaryWrites.push(batch=>batch.update(inviteDoc.ref,{
+        status:'revoked',revokedAt:serverTimestamp(),revokedBy:user.uid,updatedAt:serverTimestamp()
+      }));
+    }
+    for(const memberDoc of membersSnap.docs){
+      if(memberDoc.id===user.uid) continue;
+      preliminaryWrites.push(batch=>batch.update(memberDoc.ref,{
+        status:'revoked',revokedAt:serverTimestamp(),revokedBy:user.uid,updatedAt:serverTimestamp()
+      }));
+      preliminaryWrites.push(batch=>batch.delete(userVehicleRef(memberDoc.id,vehicle.id)));
+    }
+    await commitWriteChunks(preliminaryWrites);
+
+    const finalBatch=db.batch();
+    finalBatch.update(vehicleRef(vehicle.id),{
+      status:'deleted',deletedAt:serverTimestamp(),deletedBy:user.uid,updatedAt:serverTimestamp()
+    });
+    finalBatch.update(memberRef(vehicle.id,user.uid),{
+      status:'deleted',deletedAt:serverTimestamp(),updatedAt:serverTimestamp()
+    });
+    finalBatch.delete(userVehicleRef(user.uid,vehicle.id));
+    await finalBatch.commit();
+
+    state.currentVehicleId=null;
+    state.currentVehicle=null;
+    state.currentMembership=null;
+    showToast('Véhicule supprimé.');
+    await showVehicleList();
+  }catch(error){
+    console.error('Suppression véhicule',error);
+    showToast(`Suppression impossible : ${error.message}`);
+    await openVehicle(vehicle.id);
+  }
 }
 
 function renderVehicleForm(vehicle=null){
@@ -771,14 +892,14 @@ async function revokeMember(uid){
 
 function renderAccount(){
   state.route='account';setHeader({back:true,account:false,subtitle:'Compte'});
-  appEl.innerHTML=`<section class="screen"><div class="card"><div class="card-head"><h1>Mon compte</h1></div><div class="card-body"><div class="account-line"><span>Identifiant</span><strong>${escapeHtml(formatPhone(auth.currentUser?.phoneNumber||''))}</strong></div><div class="account-line"><span>Véhicules accessibles</span><strong>${state.userVehicles.length}</strong></div><div class="actions"><button class="btn danger block" id="signOut" type="button">Se déconnecter</button></div></div></div></section>`;
+  appEl.innerHTML=`<section class="screen"><div class="card"><div class="card-head"><h1>Mon compte</h1></div><div class="card-body"><div class="account-line"><span>Identifiant</span><strong>${escapeHtml(formatPhone(auth.currentUser?.phoneNumber||''))}</strong></div><div class="account-line"><span>Accès WB Carnet</span><strong>Autorisé</strong></div><div class="account-line"><span>Véhicules accessibles</span><strong>${state.userVehicles.length}</strong></div><div class="actions"><button class="btn danger block" id="signOut" type="button">Se déconnecter</button></div></div></div></section>`;
   document.getElementById('signOut').addEventListener('click',async()=>{await auth.signOut();state.inviteToken='';history.replaceState({},document.title,location.pathname);renderLogin();});
 }
 
 backButton.addEventListener('click',()=>{
   if(state.route==='code') return state.inviteToken?renderInvitation():renderLogin();
   if(state.route==='vehicle') return showVehicleList();
-  if(['vehicle-edit','operation','access'].includes(state.route)) return openVehicle(state.currentVehicleId);
+  if(['vehicle-edit','operation'].includes(state.route)) return openVehicle(state.currentVehicleId);
   if(state.route==='vehicle-new'||state.route==='account') return showVehicleList();
   showVehicleList();
 });
@@ -789,10 +910,28 @@ async function boot(){
   await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
   auth.onAuthStateChanged(async user=>{
     state.user=user;
-    if(user){ try{await ensureUserProfile(user);}catch(error){console.warn('Profil',error);} }
-    if(state.inviteToken){ await renderInvitation(); }
-    else if(user){ await showVehicleList(); }
-    else{ renderLogin(); }
+    if(state.inviteToken){
+      await renderInvitation();
+      return;
+    }
+    if(!user){
+      renderLogin();
+      return;
+    }
+    setLoading('Vérification de votre accès…');
+    try{
+      const profile = await ensureAuthorizedProfile(user);
+      if(profile){
+        await showVehicleList();
+      }else{
+        await auth.signOut();
+        renderLogin('Ce numéro ne dispose pas encore d’une invitation activée.');
+      }
+    }catch(error){
+      console.error('Vérification accès',error);
+      await auth.signOut().catch(()=>{});
+      renderLogin('Impossible de vérifier votre autorisation. Réessaie plus tard.');
+    }
   });
 }
 
