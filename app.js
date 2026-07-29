@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '5.4';
+const APP_VERSION = '5.5';
 const INVITATION_TTL_MS = 24 * 60 * 60 * 1000;
 const C = Object.freeze({
   users: 'wbCarnetUsers',
@@ -30,39 +30,6 @@ const state = {
 const appEl = document.getElementById('app');
 
 
-async function forceApplicationRefresh(button, statusEl){
-  if(button) button.disabled = true;
-  if(statusEl){ statusEl.className = 'status'; statusEl.textContent = 'Mise à jour en cours…'; }
-  try{
-    const scopePath = new URL('./', location.href).pathname;
-    if('serviceWorker' in navigator){
-      const registrations = await navigator.serviceWorker.getRegistrations();
-      await Promise.all(
-        registrations
-          .filter(registration => {
-            try { return new URL(registration.scope).pathname === scopePath; }
-            catch(_) { return false; }
-          })
-          .map(registration => registration.unregister())
-      );
-    }
-    if('caches' in window){
-      const cacheNames = await caches.keys();
-      await Promise.all(
-        cacheNames
-          .filter(name => name.startsWith('wb-carnet-'))
-          .map(name => caches.delete(name))
-      );
-    }
-    const url = new URL(location.href);
-    url.searchParams.set('_maj', Date.now().toString());
-    location.replace(url.toString());
-  }catch(error){
-    console.error('Mise à jour forcée', error);
-    if(statusEl){ statusEl.className = 'status error'; statusEl.textContent = "Impossible de forcer la mise à jour. Réessaie en étant connecté à Internet."; }
-    if(button) button.disabled = false;
-  }
-}
 const backButton = document.getElementById('backButton');
 const accountButton = document.getElementById('accountButton');
 const subtitleEl = document.getElementById('appSubtitle');
@@ -296,17 +263,9 @@ function renderLogin(accessMessage=''){
           <button class="btn block" id="loginSend" type="submit">Recevoir mon code</button>
           <div class="status" id="loginStatus"></div>
         </form>
-        <button class="btn ghost block" id="forceUpdateButton" type="button">Forcer la mise à jour</button>
-        <div class="status" id="forceUpdateStatus"></div>
         <div class="landing-version">Version ${APP_VERSION}</div>
       </div>
     </section>`;
-  document.getElementById('forceUpdateButton').addEventListener('click',()=>{
-    forceApplicationRefresh(
-      document.getElementById('forceUpdateButton'),
-      document.getElementById('forceUpdateStatus')
-    );
-  });
   document.getElementById('loginForm').addEventListener('submit',async event=>{
     event.preventDefault();
     const status = document.getElementById('loginStatus');
@@ -717,7 +676,6 @@ function renderVehicleDetail(){
   document.getElementById('addOperation')?.addEventListener('click',()=>renderOperationForm());
   document.getElementById('addOperationEmpty')?.addEventListener('click',()=>renderOperationForm());
   document.getElementById('editVehicle')?.addEventListener('click',()=>renderVehicleForm(v));
-  document.getElementById('manageAccess')?.addEventListener('click',()=>showAccessManager());
   document.getElementById('deleteVehicle')?.addEventListener('click',deleteCurrentVehicle);
   appEl.querySelectorAll('[data-edit-op]').forEach(button=>button.addEventListener('click',()=>{
     const op=state.operations.find(item=>item.id===button.dataset.editOp && item._vehicleId===button.dataset.sourceVehicle);
@@ -874,86 +832,7 @@ async function deleteOperation(sourceVehicleId,operationId){
   catch(error){ showToast(error.message); }
 }
 
-async function showAccessManager(){
-  if(!isManagerRole(state.currentMembership?.role)){ showToast('Accès administrateur requis.');return; }
-  state.route='access';clearSubscriptions();setLoading('Chargement des accès…');
-  const vehicleId=state.currentVehicleId;
-  const memberUnsub=vehicleRef(vehicleId).collection('members').onSnapshot(snap=>{
-    state.members=snap.docs.map(doc=>({id:doc.id,...doc.data()}));renderAccessManager();
-  });
-  const inviteUnsub=db.collection(C.invitations).where('vehicleId','==',vehicleId).onSnapshot(snap=>{
-    state.invitations=snap.docs.map(doc=>({id:doc.id,...doc.data()})).sort((a,b)=>asMillis(b.createdAt)-asMillis(a.createdAt));renderAccessManager();
-  });
-  state.unsubscribers.push(memberUnsub,inviteUnsub);
-}
-function renderAccessManager(){
-  document.body.classList.remove('landing-mode');
-  const v=state.currentVehicle;if(!v)return;
-  setHeader({back:true,account:true,subtitle:'Gestion des accès'});
-  const activeMembers=state.members.filter(m=>m.status==='active');
-  const membersHtml=activeMembers.map(member=>{
-    const own=member.id===auth.currentUser.uid;const manager=isManagerRole(member.role);
-    return `<div class="access-item"><div class="access-top"><div><div class="access-phone">${escapeHtml(formatPhone(member.phone||''))}</div><div class="access-meta">${manager?(member.role==='atelier_admin'?'Administrateur WheelerBrothers':'Propriétaire de la fiche'):'Accès actif'}${member.activatedAt?` · depuis le ${escapeHtml(formatDateTime(member.activatedAt))}`:''}</div></div><span class="badge ok">Actif</span></div>${!own&&!manager?`<div class="access-actions"><button class="btn danger small" data-revoke-uid="${escapeHtml(member.id)}" type="button">Révoquer l’accès</button></div>`:''}</div>`;
-  }).join('');
-  const pending=state.invitations.filter(inv=>['pending','cancelled','revoked'].includes(invitationStatus(inv))||invitationStatus(inv)==='expired');
-  const invitesHtml=pending.map(inv=>{
-    const status=invitationStatus(inv);const canCancel=status==='pending';
-    return `<div class="access-item"><div class="access-top"><div><div class="access-phone">${escapeHtml(formatPhone(inv.phone))}</div><div class="access-meta">${escapeHtml(inviteStatusLabel(status))}${inv.expiresAt&&status==='pending'?` · expire le ${escapeHtml(formatDateTime(inv.expiresAt))}`:''}</div></div><span class="badge ${status==='pending'?'warn':'muted'}">${escapeHtml(status)}</span></div>${canCancel?`<div class="access-actions"><button class="btn ghost small" data-copy-invite="${escapeHtml(inv.id)}" type="button">Copier le lien</button><button class="btn danger small" data-cancel-invite="${escapeHtml(inv.id)}" type="button">Annuler</button></div>`:''}</div>`;
-  }).join('');
-  appEl.innerHTML=`<section class="screen"><div class="page-head"><div><h1>Accès au véhicule</h1><p>${escapeHtml(v.model)} · ${escapeHtml(displayPlate(v.plate))}</p></div><button class="btn" id="newInvite" type="button">+ Inviter un proche</button></div>
-    <div class="section-title">Personnes autorisées</div><div class="access-list">${membersHtml||'<div class="notice">Aucun accès actif.</div>'}</div>
-    <div class="section-title">Invitations</div><div class="access-list">${invitesHtml||'<div class="notice">Aucune invitation en attente ou récente.</div>'}</div></section>`;
-  document.getElementById('newInvite').addEventListener('click',openInviteModal);
-  appEl.querySelectorAll('[data-revoke-uid]').forEach(btn=>btn.addEventListener('click',()=>revokeMember(btn.dataset.revokeUid)));
-  appEl.querySelectorAll('[data-cancel-invite]').forEach(btn=>btn.addEventListener('click',()=>cancelInvitation(btn.dataset.cancelInvite)));
-  appEl.querySelectorAll('[data-copy-invite]').forEach(btn=>btn.addEventListener('click',()=>copyInviteLink(btn.dataset.copyInvite)));
-}
-function openInviteModal(){
-  const modal=openModal('Inviter un proche',`<form id="inviteForm"><div class="field"><label for="invitePhone">Numéro de téléphone</label><input type="tel" id="invitePhone" inputmode="tel" placeholder="06 12 34 56 78" required><div class="help">Le lien sera valable 24 heures et le numéro sera verrouillé sur la page d’activation.</div></div><button class="btn block" id="inviteCreate" type="submit">Créer le lien et ouvrir Messages</button><div class="status" id="inviteCreateStatus"></div></form>`);
-  modal.querySelector('#inviteForm').addEventListener('submit',async event=>{
-    event.preventDefault();const status=modal.querySelector('#inviteCreateStatus');const button=modal.querySelector('#inviteCreate');
-    status.className='status';status.textContent='Création de l’invitation…';button.disabled=true;
-    try{
-      const invite=await createInvitation(normalizePhone(modal.querySelector('#invitePhone').value));
-      status.className='status ok';status.innerHTML=`Invitation créée.<br><button class="btn ghost small" id="copyCreatedInvite" type="button">Copier le lien</button>`;
-      modal.querySelector('#copyCreatedInvite').addEventListener('click',()=>copyInviteLink(invite.id));
-      openSmsInvitation(invite);
-    }catch(error){status.className='status error';status.textContent=error.message;button.disabled=false;}
-  });
-}
-async function createInvitation(phone){
-  const v=state.currentVehicle;const token=randomToken();const ref=invitationRef(token);const createdBy=auth.currentUser.uid;
-  const data={vehicleId:v.id,phone,role:'member',status:'pending',model:v.model||'',engine:v.engine||'',plate:v.plate||'',plateKey:v.plateKey||'',ownerName:v.ownerName||'',createdBy,createdAt:serverTimestamp(),updatedAt:serverTimestamp(),expiresAt:timestampFromMillis(nowMs()+INVITATION_TTL_MS),usedByUid:null,usedAt:null};
-  await ref.set(data);
-  return {id:token,...data};
-}
-function inviteLink(token){ return `${WB_CARNET_PUBLIC_URL.replace(/\/?$/,'/')}?invite=${encodeURIComponent(token)}`; }
-function invitationMessage(invite){
-  return `Bonjour, voici l’accès au carnet d’entretien WB Carnet pour ${invite.model || 'votre véhicule'} ${invite.plate ? `(${invite.plate})` : ''}. Le lien est valable 24 heures : ${inviteLink(invite.id)}`;
-}
-function openSmsInvitation(invite){
-  const separator=/iPhone|iPad|iPod/i.test(navigator.userAgent)?'&':'?';
-  location.href=`sms:${encodeURIComponent(invite.phone)}${separator}body=${encodeURIComponent(invitationMessage(invite))}`;
-}
-async function copyInviteLink(token){
-  try{await navigator.clipboard.writeText(inviteLink(token));showToast('Lien copié.');}
-  catch(_error){prompt('Copiez ce lien :',inviteLink(token));}
-}
-async function cancelInvitation(token){
-  if(!confirm('Annuler cette invitation ?'))return;
-  try{await invitationRef(token).update({status:'cancelled',cancelledAt:serverTimestamp(),updatedAt:serverTimestamp()});showToast('Invitation annulée.');}
-  catch(error){showToast(error.message);}
-}
-async function revokeMember(uid){
-  const member=state.members.find(item=>item.id===uid);if(!member)return;
-  if(!confirm(`Révoquer l’accès de ${formatPhone(member.phone)} ?`))return;
-  try{
-    const batch=db.batch();
-    batch.update(memberRef(state.currentVehicleId,uid),{status:'revoked',revokedAt:serverTimestamp(),revokedBy:auth.currentUser.uid,updatedAt:serverTimestamp()});
-    batch.delete(userVehicleRef(uid,state.currentVehicleId));
-    await batch.commit();showToast('Accès révoqué.');
-  }catch(error){showToast(error.message);}
-}
+
 
 function renderAccount(){
   document.body.classList.remove('landing-mode');
@@ -972,7 +851,7 @@ backButton.addEventListener('click',()=>{
 accountButton.addEventListener('click',renderAccount);
 
 async function boot(){
-  if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js?v=5.4',{updateViaCache:'none'}).catch(()=>{})); }
+  if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js?v=5.5',{updateViaCache:'none'}).catch(()=>{})); }
   await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
   auth.onAuthStateChanged(async user=>{
     state.user=user;
