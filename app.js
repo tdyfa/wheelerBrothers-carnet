@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '5.1';
+const APP_VERSION = '5.2';
 const INVITATION_TTL_MS = 24 * 60 * 60 * 1000;
 const C = Object.freeze({
   users: 'wbCarnetUsers',
@@ -116,7 +116,8 @@ function showToast(message){
   clearTimeout(state.toastTimer);
   state.toastTimer = setTimeout(()=>toast.classList.remove('show'),2600);
 }
-function setHeader({back=false,account=Boolean(state.user),subtitle=`Version ${APP_VERSION}`}={}){
+function setHeader({back=false,account=Boolean(state.user),subtitle=`Version ${APP_VERSION}`,landing=false}={}){
+  document.body.classList.toggle('landing-mode',Boolean(landing));
   backButton.classList.toggle('hidden',!back);
   accountButton.classList.toggle('hidden',!account);
   subtitleEl.textContent = subtitle;
@@ -179,9 +180,13 @@ async function ensureAuthorizedProfile(user){
 }
 
 let recaptchaVerifier = null;
-function getRecaptchaVerifier(){
-  if(recaptchaVerifier) return recaptchaVerifier;
-  recaptchaVerifier = new firebase.auth.RecaptchaVerifier('recaptcha-container',{
+let recaptchaTarget = '';
+function getRecaptchaVerifier(buttonId){
+  if(recaptchaVerifier && recaptchaTarget === buttonId) return recaptchaVerifier;
+  resetRecaptcha();
+  if(!document.getElementById(buttonId)) throw new Error('Le bouton de vérification est introuvable. Recharge la page.');
+  recaptchaTarget = buttonId;
+  recaptchaVerifier = new firebase.auth.RecaptchaVerifier(buttonId,{
     size:'invisible',
     callback:()=>{},
     'expired-callback':()=>resetRecaptcha()
@@ -191,14 +196,14 @@ function getRecaptchaVerifier(){
 function resetRecaptcha(){
   try{ recaptchaVerifier?.clear(); }catch(_e){}
   recaptchaVerifier = null;
-  document.getElementById('recaptcha-container').innerHTML = '';
+  recaptchaTarget = '';
 }
-async function sendSmsCode(phone, mode){
+async function sendSmsCode(phone, mode, buttonId){
   const normalized = normalizePhone(phone);
   state.authMode = mode;
   state.confirmationResult = null;
   try{
-    const verifier = getRecaptchaVerifier();
+    const verifier = getRecaptchaVerifier(buttonId);
     state.confirmationResult = await auth.signInWithPhoneNumber(normalized,verifier);
     renderCodeEntry(normalized,mode);
   }catch(error){
@@ -243,19 +248,24 @@ async function confirmSmsCode(code){
 function renderLogin(accessMessage=''){
   clearSubscriptions();
   state.route = 'login';
-  setHeader({account:false});
+  setHeader({account:false,landing:true});
   appEl.innerHTML = `
-    <section class="screen centered-screen">
-      <div style="width:min(430px,100%);">
-        <div class="brand-lockup"><img src="report-cover-logo.png" alt="WheelerBrothers"><h1>WB Carnet</h1><p>Le carnet d’entretien partagé de vos véhicules.</p></div>
-        <div class="card">
-          <div class="card-head"><h2>Accès sur invitation</h2><p>WB Carnet est réservé aux personnes déjà invitées. Votre numéro sert ensuite d’identifiant.</p></div>
-          <form class="card-body" id="loginForm">${accessMessage?`<div class="notice warn">${escapeHtml(accessMessage)}</div>`:'<div class="notice">Vous devez avoir activé une première invitation avant de pouvoir vous connecter directement.</div>'}
-            <div class="field"><label for="loginPhone">Numéro de téléphone</label><input type="tel" id="loginPhone" inputmode="tel" autocomplete="tel" placeholder="06 12 34 56 78" required></div>
-            <div class="help">En demandant le code, vous acceptez que ce numéro soit utilisé par Firebase/Google pour la vérification et la prévention des abus.</div><button class="btn block" id="loginSend" type="submit">Recevoir mon code</button>
-            <div class="status" id="loginStatus"></div>
-          </form>
+    <section class="screen centered-screen landing-screen">
+      <div class="landing-box">
+        <img class="landing-logo" src="report-cover-logo.png" alt="WheelerBrothers">
+        <h1 class="landing-title">WB Carnet</h1>
+        <p class="landing-intro">Le carnet d’entretien partagé de vos véhicules.</p>
+        <div class="landing-section">
+          <h2>Accès sur invitation</h2>
+          <p>WB Carnet est réservé aux personnes déjà invitées. Votre numéro sert ensuite d’identifiant.</p>
         </div>
+        <form id="loginForm">${accessMessage?`<div class="notice warn">${escapeHtml(accessMessage)}</div>`:'<div class="notice">Vous devez avoir activé une première invitation avant de pouvoir vous connecter directement.</div>'}
+          <div class="field"><label for="loginPhone">Numéro de téléphone</label><input type="tel" id="loginPhone" inputmode="tel" autocomplete="tel" placeholder="06 12 34 56 78" required></div>
+          <div class="help">En demandant le code, vous acceptez que ce numéro soit utilisé par Firebase/Google pour la vérification et la prévention des abus.</div>
+          <button class="btn block" id="loginSend" type="submit">Recevoir mon code</button>
+          <div class="status" id="loginStatus"></div>
+        </form>
+        <div class="landing-version">Version ${APP_VERSION}</div>
       </div>
     </section>`;
   document.getElementById('loginForm').addEventListener('submit',async event=>{
@@ -263,22 +273,25 @@ function renderLogin(accessMessage=''){
     const status = document.getElementById('loginStatus');
     const button = document.getElementById('loginSend');
     status.className='status';status.textContent='Envoi du SMS…';button.disabled=true;
-    try{ await sendSmsCode(document.getElementById('loginPhone').value,'login'); }
+    try{ await sendSmsCode(document.getElementById('loginPhone').value,'login','loginSend'); }
     catch(error){ status.className='status error';status.textContent=error.message;button.disabled=false; }
   });
 }
 function renderCodeEntry(phone,mode){
   state.route = 'code';
-  setHeader({back:true,account:false,subtitle:'Vérification du numéro'});
+  setHeader({account:false,subtitle:'Vérification du numéro',landing:true});
   appEl.innerHTML = `
-    <section class="screen centered-screen"><div class="card" style="width:min(430px,100%);">
-      <div class="card-head"><h2>Code reçu par SMS</h2><p>Le code a été envoyé au <strong>${escapeHtml(formatPhone(phone))}</strong>.</p></div>
-      <form class="card-body" id="codeForm">
+    <section class="screen centered-screen landing-screen"><div class="landing-box">
+      <img class="landing-logo compact" src="report-cover-logo.png" alt="WheelerBrothers">
+      <div class="landing-section"><h2>Code reçu par SMS</h2><p>Le code a été envoyé au <strong>${escapeHtml(formatPhone(phone))}</strong>.</p></div>
+      <form id="codeForm">
         <div class="field"><label for="smsCode">Code de vérification</label><input class="code-input" type="text" id="smsCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]*" required></div>
         <button class="btn block" id="codeConfirm" type="submit">Valider le code</button>
         <button class="btn link block" id="codeAgain" type="button">Recevoir un nouveau code</button>
+        <button class="btn link block" id="codeBack" type="button">Revenir en arrière</button>
         <div class="status" id="codeStatus"></div>
       </form>
+      <div class="landing-version">Version ${APP_VERSION}</div>
     </div></section>`;
   document.getElementById('smsCode').focus();
   document.getElementById('codeForm').addEventListener('submit',async event=>{
@@ -291,8 +304,13 @@ function renderCodeEntry(phone,mode){
   document.getElementById('codeAgain').addEventListener('click',async()=>{
     const status=document.getElementById('codeStatus');
     status.className='status';status.textContent='Nouvel envoi…';
-    try{ resetRecaptcha(); await sendSmsCode(phone,mode); }
+    try{ resetRecaptcha(); await sendSmsCode(phone,mode,'codeAgain'); }
     catch(error){ status.className='status error';status.textContent=error.message; }
+  });
+  document.getElementById('codeBack').addEventListener('click',()=>{
+    resetRecaptcha();
+    state.confirmationResult=null;
+    if(mode==='invite' && state.inviteToken) renderInvitation(); else renderLogin();
   });
 }
 
@@ -305,13 +323,14 @@ async function loadInvitation(token){
 async function renderInvitation(){
   clearSubscriptions();
   state.route = 'invite';
-  setLoading("Ouverture de l'invitation…");
+  setHeader({account:false,landing:true});
+  appEl.innerHTML = `<section class="screen centered-screen landing-screen"><div class="landing-box"><div class="spinner"></div><p class="landing-intro">Ouverture de l’invitation…</p></div></section>`;
   try{
     const invite = await loadInvitation(state.inviteToken);
     const status = invitationStatus(invite);
     const signedPhone = auth.currentUser?.phoneNumber || '';
     const phoneMatches = signedPhone && signedPhone === invite.phone;
-    setHeader({back:false,account:Boolean(auth.currentUser),subtitle:'Invitation valable 24 h'});
+    setHeader({back:false,account:false,subtitle:'Invitation valable 24 h',landing:true});
     let actionHtml='';
     if(status === 'pending'){
       if(auth.currentUser && !phoneMatches){
@@ -333,9 +352,10 @@ async function renderInvitation(){
       actionHtml = `<div class="notice warn">${escapeHtml(inviteStatusLabel(status))}. Ce lien n’est plus utilisable.</div>`;
     }
     appEl.innerHTML = `
-      <section class="screen centered-screen"><div class="card" style="width:min(520px,100%);">
-        <div class="card-head"><h1>Invitation WB Carnet</h1><p>Accès au carnet d’entretien partagé d’un véhicule.</p></div>
-        <div class="card-body">
+      <section class="screen centered-screen landing-screen"><div class="landing-box wide">
+        <img class="landing-logo compact" src="report-cover-logo.png" alt="WheelerBrothers">
+        <div class="landing-section"><h1>Invitation WB Carnet</h1><p>Accès au carnet d’entretien partagé d’un véhicule.</p></div>
+        <div>
           <div class="invite-summary">
             <div class="invite-row"><span>Véhicule</span><strong>${escapeHtml(invite.model || 'Véhicule')}</strong></div>
             <div class="invite-row"><span>Immatriculation</span><strong>${escapeHtml(displayPlate(invite.plate))}</strong></div>
@@ -346,12 +366,13 @@ async function renderInvitation(){
           <div class="notice">Le numéro est fixé par l’invitation et ne peut pas être modifié. L’accès sera créé seulement après validation du code envoyé à ce numéro. En demandant le code, vous acceptez que ce numéro soit utilisé par Firebase/Google pour la vérification et la prévention des abus.</div>
           <div style="margin-top:16px">${actionHtml}</div>
         </div>
+        <div class="landing-version">Version ${APP_VERSION}</div>
       </div></section>`;
     document.getElementById('inviteSignOut')?.addEventListener('click',async()=>{ await auth.signOut(); await renderInvitation(); });
     document.getElementById('inviteSendCode')?.addEventListener('click',async()=>{
       const statusEl=document.getElementById('inviteStatus');const button=document.getElementById('inviteSendCode');
       statusEl.className='status';statusEl.textContent='Envoi du SMS…';button.disabled=true;
-      try{ await sendSmsCode(invite.phone,'invite'); }
+      try{ await sendSmsCode(invite.phone,'invite','inviteSendCode'); }
       catch(error){ statusEl.className='status error';statusEl.textContent=error.message;button.disabled=false; }
     });
     document.getElementById('inviteAccept')?.addEventListener('click',async()=>{
@@ -510,6 +531,7 @@ async function mergeVehicleInto(sourceId,targetId,sourceVehicle){
 }
 
 async function showVehicleList(){
+  document.body.classList.remove('landing-mode');
   if(!auth.currentUser){ renderLogin(); return; }
   clearSubscriptions();
   state.route='vehicles';state.currentVehicleId=null;state.currentVehicle=null;
@@ -565,6 +587,7 @@ function renderVehicleList(){
 }
 
 async function openVehicle(vehicleId){
+  document.body.classList.remove('landing-mode');
   if(!auth.currentUser){ renderLogin(); return; }
   clearSubscriptions();
   state.route='vehicle';state.currentVehicleId=vehicleId;state.operations=[];state.members=[];state.invitations=[];
@@ -735,6 +758,7 @@ async function deleteCurrentVehicle(){
 }
 
 function renderVehicleForm(vehicle=null){
+  document.body.classList.remove('landing-mode');
   const editing=Boolean(vehicle);
   state.route=editing?'vehicle-edit':'vehicle-new';
   setHeader({back:true,account:true,subtitle:editing?'Modifier la fiche':'Nouveau véhicule'});
@@ -774,6 +798,7 @@ function renderVehicleForm(vehicle=null){
 }
 
 function renderOperationForm(operation=null){
+  document.body.classList.remove('landing-mode');
   const editing=Boolean(operation);
   state.route='operation';
   setHeader({back:true,account:true,subtitle:editing?'Modifier une opération':'Nouvelle opération'});
@@ -823,6 +848,7 @@ async function showAccessManager(){
   state.unsubscribers.push(memberUnsub,inviteUnsub);
 }
 function renderAccessManager(){
+  document.body.classList.remove('landing-mode');
   const v=state.currentVehicle;if(!v)return;
   setHeader({back:true,account:true,subtitle:'Gestion des accès'});
   const activeMembers=state.members.filter(m=>m.status==='active');
@@ -891,6 +917,7 @@ async function revokeMember(uid){
 }
 
 function renderAccount(){
+  document.body.classList.remove('landing-mode');
   state.route='account';setHeader({back:true,account:false,subtitle:'Compte'});
   appEl.innerHTML=`<section class="screen"><div class="card"><div class="card-head"><h1>Mon compte</h1></div><div class="card-body"><div class="account-line"><span>Identifiant</span><strong>${escapeHtml(formatPhone(auth.currentUser?.phoneNumber||''))}</strong></div><div class="account-line"><span>Accès WB Carnet</span><strong>Autorisé</strong></div><div class="account-line"><span>Véhicules accessibles</span><strong>${state.userVehicles.length}</strong></div><div class="actions"><button class="btn danger block" id="signOut" type="button">Se déconnecter</button></div></div></div></section>`;
   document.getElementById('signOut').addEventListener('click',async()=>{await auth.signOut();state.inviteToken='';history.replaceState({},document.title,location.pathname);renderLogin();});
@@ -906,7 +933,7 @@ backButton.addEventListener('click',()=>{
 accountButton.addEventListener('click',renderAccount);
 
 async function boot(){
-  if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js?v=5.1').catch(()=>{})); }
+  if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js?v=5.2').catch(()=>{})); }
   await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
   auth.onAuthStateChanged(async user=>{
     state.user=user;
