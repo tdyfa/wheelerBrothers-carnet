@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '5.5';
+const APP_VERSION = '5.6';
 const INVITATION_TTL_MS = 24 * 60 * 60 * 1000;
 const C = Object.freeze({
   users: 'wbCarnetUsers',
@@ -255,9 +255,7 @@ function renderLogin(accessMessage=''){
     <section class="screen centered-screen landing-screen">
       <div class="landing-box">
         <img class="landing-logo" src="report-cover-logo.png" alt="WheelerBrothers">
-        <h1 class="landing-title">Carnet</h1>
-        <p class="landing-intro">Le carnet d’entretien partagé de vos véhicules.</p>
-        <form id="loginForm">${accessMessage?`<div class="notice warn">${escapeHtml(accessMessage)}</div>`:'<div class="notice">WheelerBrothers Carnet est réservé aux personnes déjà invitées. Votre numéro sert ensuite d’identifiant.</div>'}
+        <form id="loginForm">${accessMessage?`<div class="notice warn">${escapeHtml(accessMessage)}</div>`:''}
           <div class="field"><label for="loginPhone">Numéro de téléphone</label><input type="tel" id="loginPhone" inputmode="tel" autocomplete="tel" placeholder="06 12 34 56 78" required></div>
           <div class="help">En demandant le code, vous acceptez que ce numéro soit utilisé par Firebase/Google pour la vérification et la prévention des abus.</div>
           <button class="btn block" id="loginSend" type="submit">Recevoir mon code</button>
@@ -851,7 +849,7 @@ backButton.addEventListener('click',()=>{
 accountButton.addEventListener('click',renderAccount);
 
 async function boot(){
-  if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js?v=5.5',{updateViaCache:'none'}).catch(()=>{})); }
+  if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js?v=5.6',{updateViaCache:'none'}).catch(()=>{})); }
   await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
   auth.onAuthStateChanged(async user=>{
     state.user=user;
