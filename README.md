@@ -1,17 +1,12 @@
-# WB Carnet v5.3
+# WB Carnet v5.4
 
-Correctifs :
-- accueil et écrans de connexion harmonisés avec WheelerBrothers, sans bande noire ;
-- reCAPTCHA invisible rattaché au bouton d’envoi comme recommandé par Firebase ;
-- conservation de l’isolation de session Firebase de la v5 ;
-- cache PWA v5.3.
+Ajout d’un bouton **Forcer la mise à jour** sur la page d’accueil.
 
-Aucune modification des règles Firebase n’est nécessaire.
+Le bouton :
+- désinscrit uniquement le service worker de WB Carnet ;
+- supprime uniquement les caches statiques nommés `wb-carnet-*` ;
+- recharge l’application depuis le réseau ;
+- ne supprime pas les véhicules, opérations, invitations, session Firebase, historique Safari, cookies, localStorage ou IndexedDB.
 
-
-## Ajustements v5.3
-
-- titre de la page : `WheelerBrothers - Carnet` ;
-- titre d’accueil : `Carnet` ;
-- suppression du bloc « Accès sur invitation » ;
-- nouveau texte d’information dans l’encadré de connexion.
+Pour obtenir cette version une première fois sur iPhone après publication, ouvrir dans Safari :
+`https://tdyfa.github.io/wheelerBrothers-carnet/?maj=5.4`

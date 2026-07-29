@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '5.3';
+const APP_VERSION = '5.4';
 const INVITATION_TTL_MS = 24 * 60 * 60 * 1000;
 const C = Object.freeze({
   users: 'wbCarnetUsers',
@@ -28,6 +28,41 @@ const state = {
 };
 
 const appEl = document.getElementById('app');
+
+
+async function forceApplicationRefresh(button, statusEl){
+  if(button) button.disabled = true;
+  if(statusEl){ statusEl.className = 'status'; statusEl.textContent = 'Mise à jour en cours…'; }
+  try{
+    const scopePath = new URL('./', location.href).pathname;
+    if('serviceWorker' in navigator){
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(
+        registrations
+          .filter(registration => {
+            try { return new URL(registration.scope).pathname === scopePath; }
+            catch(_) { return false; }
+          })
+          .map(registration => registration.unregister())
+      );
+    }
+    if('caches' in window){
+      const cacheNames = await caches.keys();
+      await Promise.all(
+        cacheNames
+          .filter(name => name.startsWith('wb-carnet-'))
+          .map(name => caches.delete(name))
+      );
+    }
+    const url = new URL(location.href);
+    url.searchParams.set('_maj', Date.now().toString());
+    location.replace(url.toString());
+  }catch(error){
+    console.error('Mise à jour forcée', error);
+    if(statusEl){ statusEl.className = 'status error'; statusEl.textContent = "Impossible de forcer la mise à jour. Réessaie en étant connecté à Internet."; }
+    if(button) button.disabled = false;
+  }
+}
 const backButton = document.getElementById('backButton');
 const accountButton = document.getElementById('accountButton');
 const subtitleEl = document.getElementById('appSubtitle');
@@ -261,9 +296,17 @@ function renderLogin(accessMessage=''){
           <button class="btn block" id="loginSend" type="submit">Recevoir mon code</button>
           <div class="status" id="loginStatus"></div>
         </form>
+        <button class="btn ghost block" id="forceUpdateButton" type="button">Forcer la mise à jour</button>
+        <div class="status" id="forceUpdateStatus"></div>
         <div class="landing-version">Version ${APP_VERSION}</div>
       </div>
     </section>`;
+  document.getElementById('forceUpdateButton').addEventListener('click',()=>{
+    forceApplicationRefresh(
+      document.getElementById('forceUpdateButton'),
+      document.getElementById('forceUpdateStatus')
+    );
+  });
   document.getElementById('loginForm').addEventListener('submit',async event=>{
     event.preventDefault();
     const status = document.getElementById('loginStatus');
@@ -929,7 +972,7 @@ backButton.addEventListener('click',()=>{
 accountButton.addEventListener('click',renderAccount);
 
 async function boot(){
-  if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js?v=5.2').catch(()=>{})); }
+  if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js?v=5.4',{updateViaCache:'none'}).catch(()=>{})); }
   await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
   auth.onAuthStateChanged(async user=>{
     state.user=user;
