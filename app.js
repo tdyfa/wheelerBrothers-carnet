@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '5.6';
+const APP_VERSION = '5.7';
 const INVITATION_TTL_MS = 24 * 60 * 60 * 1000;
 const C = Object.freeze({
   users: 'wbCarnetUsers',
@@ -405,22 +405,16 @@ async function acceptInvitation(token,user){
     if(status !== 'pending') throw new Error(inviteStatusLabel(status));
     if(invite.phone !== user.phoneNumber) throw new Error("Le numéro vérifié ne correspond pas à l'invitation.");
     if(asMillis(invite.expiresAt) <= nowMs()) throw new Error("L'invitation a expiré.");
-    const vRef = vehicleRef(invite.vehicleId);
-    const vehicleSnap = await transaction.get(vRef);
-    if(!vehicleSnap.exists) throw new Error("La fiche véhicule n'existe plus.");
-    const vehicle = vehicleSnap.data();
+    /* Avant l’activation, le destinataire n’a pas encore le droit de lire la fiche
+       véhicule ni son document membre. Les informations nécessaires proviennent donc
+       de l’invitation, tandis que son éventuel rôle existant est conservé via son
+       pointeur personnel, qu’il est autorisé à lire. */
     targetVehicleId = invite.vehicleId;
-    targetPlateKey = vehicle.plateKey || invite.plateKey || '';
+    targetPlateKey = invite.plateKey || '';
 
-    /* Une invitation ne doit jamais rétrograder le propriétaire ou l'administrateur
-       déjà présent sur la fiche, notamment lorsqu'il teste son propre lien. */
-    const existingMemberSnap = await transaction.get(memberRef(targetVehicleId,user.uid));
     const existingPointerSnap = await transaction.get(userVehicleRef(user.uid,targetVehicleId));
-    const existingMemberRole = existingMemberSnap.exists ? existingMemberSnap.data().role : '';
     const existingPointerRole = existingPointerSnap.exists ? existingPointerSnap.data().role : '';
-    const preservedRole = isManagerRole(existingMemberRole)
-      ? existingMemberRole
-      : (isManagerRole(existingPointerRole) ? existingPointerRole : 'member');
+    const preservedRole = isManagerRole(existingPointerRole) ? existingPointerRole : 'member';
 
     transaction.set(memberRef(targetVehicleId,user.uid),{
       uid:user.uid,phone:user.phoneNumber,role:preservedRole,status:'active',

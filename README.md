@@ -1,3 +1,11 @@
+<!--
+HISTORIQUE DES VERSIONS
+
+v5.7
+- Correctif d’activation des invitations : suppression des lectures interdites avant la création de l’accès.
+
+-->
+
 # WB Carnet v5.6
 
 Correctif d’interface de la page d’accueil :
