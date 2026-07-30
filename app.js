@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '6';
+const APP_VERSION = '7';
 const INVITATION_TTL_MS = 24 * 60 * 60 * 1000;
 const C = Object.freeze({
   users: 'wbCarnetUsers',
@@ -89,6 +89,272 @@ function formatDateTime(value){
 function formatMileage(value){
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? `${n.toLocaleString('fr-FR')} km` : 'Kilométrage non renseigné';
+}
+
+
+function formatHistoryDate(value){
+  if(!value) return 'Date non renseignée';
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(String(value))
+    ? new Date(`${value}T12:00:00`)
+    : new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleDateString('fr-FR');
+}
+
+function safeHistoryFilePart(value){
+  return String(value || 'vehicule')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .replace(/[^a-zA-Z0-9_-]+/g,'_')
+    .replace(/^_+|_+$/g,'') || 'vehicule';
+}
+
+function loadHistoryImage(src){
+  return new Promise((resolve,reject)=>{
+    const image = new Image();
+    image.onload = ()=>resolve(image);
+    image.onerror = reject;
+    image.src = src;
+  });
+}
+
+function historyTextLines(ctx,text,maxWidth){
+  const paragraphs = String(text || '').split(/\n/);
+  const lines = [];
+  paragraphs.forEach((paragraph,pIndex)=>{
+    const words = paragraph.split(/\s+/).filter(Boolean);
+    if(words.length === 0){
+      lines.push('');
+    }else{
+      let line = '';
+      words.forEach(word=>{
+        const test = line ? `${line} ${word}` : word;
+        if(line && ctx.measureText(test).width > maxWidth){
+          lines.push(line);
+          line = word;
+        }else{
+          line = test;
+        }
+      });
+      if(line) lines.push(line);
+    }
+    if(pIndex < paragraphs.length - 1) lines.push('');
+  });
+  return lines;
+}
+
+function drawHistoryLines(ctx,lines,x,y,lineHeight,maxLines){
+  const count = typeof maxLines === 'number' ? Math.min(lines.length,maxLines) : lines.length;
+  for(let index=0;index<count;index++) ctx.fillText(lines[index],x,y+index*lineHeight);
+  return y+count*lineHeight;
+}
+
+function historyBase64Bytes(dataUrl){
+  const binary = atob(dataUrl.split(',')[1]);
+  const bytes = new Uint8Array(binary.length);
+  for(let index=0;index<binary.length;index++) bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
+
+function buildHistoryImagePdf(jpegPages,pageWidthPt=595.28,pageHeightPt=841.89){
+  const encoder = new TextEncoder();
+  const chunks = [];
+  const offsets = [0];
+  let length = 0;
+  const pushBytes = bytes=>{ chunks.push(bytes); length += bytes.length; };
+  const pushText = text=>pushBytes(encoder.encode(text));
+  const pageCount = jpegPages.length;
+  const objectCount = 2 + pageCount*3;
+
+  pushText('%PDF-1.4\n%âãÏÓ\n');
+  const writeObject = (id,writeParts)=>{
+    offsets[id] = length;
+    pushText(`${id} 0 obj\n`);
+    writeParts();
+    pushText('\nendobj\n');
+  };
+
+  writeObject(1,()=>pushText('<< /Type /Catalog /Pages 2 0 R >>'));
+  const pageIds = jpegPages.map((_page,index)=>3+index*3);
+  writeObject(2,()=>pushText(`<< /Type /Pages /Count ${pageCount} /Kids [${pageIds.map(id=>`${id} 0 R`).join(' ')}] >>`));
+
+  jpegPages.forEach((page,index)=>{
+    const pageId = 3+index*3;
+    const imageId = pageId+1;
+    const contentId = pageId+2;
+    writeObject(pageId,()=>pushText(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageWidthPt} ${pageHeightPt}] /Resources << /XObject << /Im${index} ${imageId} 0 R >> >> /Contents ${contentId} 0 R >>`));
+    const imageBytes = historyBase64Bytes(page.dataUrl);
+    writeObject(imageId,()=>{
+      pushText(`<< /Type /XObject /Subtype /Image /Width ${page.width} /Height ${page.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${imageBytes.length} >>\nstream\n`);
+      pushBytes(imageBytes);
+      pushText('\nendstream');
+    });
+    const stream = `q\n${pageWidthPt} 0 0 ${pageHeightPt} 0 0 cm\n/Im${index} Do\nQ`;
+    writeObject(contentId,()=>pushText(`<< /Length ${encoder.encode(stream).length} >>\nstream\n${stream}\nendstream`));
+  });
+
+  const xrefOffset = length;
+  pushText(`xref\n0 ${objectCount+1}\n`);
+  pushText('0000000000 65535 f \n');
+  for(let id=1;id<=objectCount;id++) pushText(`${String(offsets[id]).padStart(10,'0')} 00000 n \n`);
+  pushText(`trailer\n<< /Size ${objectCount+1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`);
+  return new Blob(chunks,{type:'application/pdf'});
+}
+
+async function exportCurrentVehicleHistory(){
+  const vehicle = state.currentVehicle;
+  if(!vehicle) return;
+  const operations = [...state.operations].sort((first,second)=>{
+    const dateCompare = String(first.date || '').localeCompare(String(second.date || ''));
+    return dateCompare || String(first.id || '').localeCompare(String(second.id || ''));
+  });
+  if(operations.length === 0){
+    showToast("Aucune opération à inclure dans l'historique.");
+    return;
+  }
+
+  let logo = null;
+  try{ logo = await loadHistoryImage(`report-cover-logo.png?v=${APP_VERSION}`); }catch(_error){}
+
+  const W = 1240;
+  const H = 1754;
+  const margin = 82;
+  const contentW = W-margin*2;
+  const pages = [];
+  const firstDate = operations[0]?.date ? formatHistoryDate(operations[0].date) : '—';
+  const lastDate = operations[operations.length-1]?.date ? formatHistoryDate(operations[operations.length-1].date) : '—';
+  const generatedAt = new Date().toLocaleDateString('fr-FR');
+
+  let canvas;
+  let ctx;
+  let y;
+  let pageNo = 0;
+  const newPage = ()=>{
+    canvas = document.createElement('canvas');
+    canvas.width = W;
+    canvas.height = H;
+    ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0,0,W,H);
+    ctx.fillStyle = '#111';
+    ctx.textBaseline = 'top';
+    y = margin;
+    pageNo++;
+  };
+  const finishPage = ()=>{
+    ctx.fillStyle = '#777';
+    ctx.font = '22px Arial';
+    ctx.textAlign = 'right';
+    ctx.fillText(`Page ${pageNo}`,W-margin,H-48);
+    ctx.textAlign = 'left';
+    pages.push({dataUrl:canvas.toDataURL('image/jpeg',0.94),width:W,height:H});
+  };
+  const drawTableHeader = ()=>{
+    ctx.fillStyle = '#111';
+    ctx.fillRect(margin,y,contentW,4);
+    y += 14;
+    ctx.font = 'bold 22px Arial';
+    ctx.fillText('DATE',margin,y);
+    ctx.fillText('KILOMÉTRAGE',margin+230,y);
+    ctx.fillText('OPÉRATION ET DÉTAILS',margin+465,y);
+    y += 38;
+    ctx.fillRect(margin,y,contentW,3);
+    y += 12;
+  };
+
+  newPage();
+  if(logo){
+    const maxW = 235;
+    const maxH = 105;
+    const ratio = Math.min(maxW/logo.width,maxH/logo.height);
+    ctx.drawImage(logo,W-margin-logo.width*ratio,margin,logo.width*ratio,logo.height*ratio);
+  }
+  ctx.font = 'bold 20px Arial';
+  ctx.fillStyle = '#555';
+  ctx.fillText("WHEELER BROTHERS · CARNET D'ATELIER",margin,y);
+  y += 38;
+  ctx.font = 'bold 48px Arial';
+  ctx.fillStyle = '#111';
+  ctx.fillText('Historique complet du véhicule',margin,y);
+  y += 68;
+  ctx.font = 'bold 31px Arial';
+  ctx.fillText(vehicle.model || 'Véhicule',margin,y);
+  y += 48;
+  ctx.font = '23px Arial';
+  const metaLeft = [
+    `Motorisation : ${vehicle.engine || 'Non renseignée'}`,
+    `Propriétaire : ${vehicle.ownerName || 'Non renseigné'}`
+  ];
+  const metaRight = [
+    `Immatriculation : ${vehicle.plate || 'Non renseignée'}`,
+    `Document généré le : ${generatedAt}`
+  ];
+  metaLeft.forEach((text,index)=>ctx.fillText(text,margin,y+index*34));
+  metaRight.forEach((text,index)=>ctx.fillText(text,margin+555,y+index*34));
+  y += 86;
+  ctx.fillRect(margin,y,contentW,5);
+  y += 35;
+  ctx.fillStyle = '#f4f5f7';
+  ctx.fillRect(margin,y,contentW,72);
+  ctx.strokeStyle = '#d9dde4';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(margin,y,contentW,72);
+  ctx.fillStyle = '#111';
+  ctx.font = '23px Arial';
+  ctx.fillText(`${operations.length} opération${operations.length>1?'s':''} enregistrée${operations.length>1?'s':''}, du ${firstDate} au ${lastDate}.`,margin+20,y+23);
+  y += 108;
+  drawTableHeader();
+
+  for(const operation of operations){
+    const title = operation.title || 'Intervention';
+    const detailsParts = [];
+    if(operation.details) detailsParts.push(operation.details);
+    if(operation.performedBy) detailsParts.push(`Réalisé par : ${operation.performedBy}`);
+    const details = detailsParts.join(' — ');
+    ctx.font = 'bold 24px Arial';
+    const titleLines = historyTextLines(ctx,title,contentW-485);
+    ctx.font = '21px Arial';
+    const detailLines = details ? historyTextLines(ctx,details,contentW-485) : [];
+    const rowH = Math.max(78,18+titleLines.length*31+(detailLines.length?8+detailLines.length*28:0)+18);
+    if(y+rowH > H-90){
+      finishPage();
+      newPage();
+      ctx.font = 'bold 27px Arial';
+      ctx.fillText(`Historique — ${vehicle.model || 'Véhicule'}`,margin,y);
+      y += 52;
+      drawTableHeader();
+    }
+    ctx.fillStyle = '#111';
+    ctx.font = 'bold 22px Arial';
+    ctx.fillText(formatHistoryDate(operation.date),margin,y+17);
+    ctx.font = '22px Arial';
+    ctx.fillText(operation.mileage ? `${Number(operation.mileage).toLocaleString('fr-FR')} km` : '—',margin+230,y+17);
+    ctx.font = 'bold 24px Arial';
+    const textY = drawHistoryLines(ctx,titleLines,margin+465,y+14,31);
+    if(detailLines.length){
+      ctx.fillStyle = '#444';
+      ctx.font = '21px Arial';
+      drawHistoryLines(ctx,detailLines,margin+465,textY+7,28);
+    }
+    ctx.strokeStyle = '#d9dde4';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(margin,y+rowH);
+    ctx.lineTo(W-margin,y+rowH);
+    ctx.stroke();
+    y += rowH;
+  }
+  finishPage();
+
+  const pdfBlob = buildHistoryImagePdf(pages);
+  const filename = `Historique_${safeHistoryFilePart(vehicle.model)}_${safeHistoryFilePart(vehicle.plate || 'sans_immatriculation')}.pdf`;
+  const url = URL.createObjectURL(pdfBlob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.rel = 'noopener';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),60000);
 }
 function randomToken(){
   const bytes = new Uint8Array(32);
@@ -690,13 +956,14 @@ function renderVehicleDetail(){
     <section class="screen">
       <article class="card">
         <div class="vehicle-profile"><div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap"><div><h1>${escapeHtml(v.model || 'Véhicule')}</h1><span class="vehicle-plate">${escapeHtml(displayPlate(v.plate))}</span></div><span class="badge ${v.origin==='atelier'?'ok':'muted'}">${v.origin==='atelier'?'Fiche WheelerBrothers':'Fiche personnelle'}</span></div><div class="profile-facts" style="margin-top:15px"><span><strong>Propriétaire :</strong> ${escapeHtml(v.ownerName || 'Non renseigné')}</span><span><strong>Motorisation :</strong> ${escapeHtml(v.engine || 'Non renseignée')}</span></div></div>
-        <div class="profile-actions"><button class="btn" id="addOperation" type="button">+ Ajouter une opération</button>${canEditVehicle?'<button class="btn ghost" id="editVehicle" type="button">Modifier la fiche</button>':''}${v.origin==='personal' && v.createdBy===auth.currentUser.uid?'<button class="btn danger" id="deleteVehicle" type="button">Supprimer le véhicule</button>':''}</div>
+        <div class="profile-actions"><button class="btn" id="addOperation" type="button">+ Ajouter une opération</button><button class="btn ghost" id="exportHistory" type="button">📄 Exporter l’historique</button>${canEditVehicle?'<button class="btn ghost" id="editVehicle" type="button">Modifier la fiche</button>':''}${v.origin==='personal' && v.createdBy===auth.currentUser.uid?'<button class="btn danger" id="deleteVehicle" type="button">Supprimer le véhicule</button>':''}</div>
       </article>
       <div class="section-title">Historique des opérations</div>
       ${state.operations.length?`<div class="operation-list">${opsHtml}</div>`:`<div class="card empty-state"><h2>Aucune opération</h2><p>Ajoutez la première intervention réalisée sur ce véhicule.</p><button class="btn" id="addOperationEmpty" type="button">Ajouter une opération</button></div>`}
     </section>`;
   document.getElementById('addOperation')?.addEventListener('click',()=>renderOperationForm());
   document.getElementById('addOperationEmpty')?.addEventListener('click',()=>renderOperationForm());
+  document.getElementById('exportHistory')?.addEventListener('click',exportCurrentVehicleHistory);
   document.getElementById('editVehicle')?.addEventListener('click',()=>renderVehicleForm(v));
   document.getElementById('deleteVehicle')?.addEventListener('click',deleteCurrentVehicle);
   appEl.querySelectorAll('[data-edit-op]').forEach(button=>button.addEventListener('click',()=>{
@@ -873,7 +1140,7 @@ backButton.addEventListener('click',()=>{
 accountButton.addEventListener('click',renderAccount);
 
 async function boot(){
-  if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js?v=6',{updateViaCache:'none'}).catch(()=>{})); }
+  if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js?v=7',{updateViaCache:'none'}).catch(()=>{})); }
   await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
   auth.onAuthStateChanged(async user=>{
     state.user=user;

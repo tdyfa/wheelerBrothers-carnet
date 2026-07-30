@@ -1,6 +1,11 @@
 <!--
 HISTORIQUE DES VERSIONS
 
+v7
+- Ajout de « Exporter l’historique » sur chaque fiche véhicule.
+- PDF au même format et avec la même mise en page que l’export du Carnet d’atelier.
+- Inclusion des opérations personnelles et des opérations WheelerBrothers visibles sur la fiche.
+
 v6
 - Prise en charge de la désactivation globale d’un compte WB Carnet.
 - Déconnexion immédiate d’une session active lorsque le compte est désactivé depuis WheelerBrothers.
@@ -11,7 +16,7 @@ v5.7
 - Correction de l’activation des invitations avant accès à la fiche protégée.
 -->
 
-# WheelerBrothers Carnet v6
+# WheelerBrothers Carnet v7
 
 WB Carnet reste accessible uniquement après une invitation créée depuis WheelerBrothers Atelier.
 
