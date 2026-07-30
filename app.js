@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '5.7';
+const APP_VERSION = '6';
 const INVITATION_TTL_MS = 24 * 60 * 60 * 1000;
 const C = Object.freeze({
   users: 'wbCarnetUsers',
@@ -29,6 +29,8 @@ const state = {
 
 const appEl = document.getElementById('app');
 
+let profileStatusUnsubscribe = null;
+let handlingAccountDisable = false;
 
 const backButton = document.getElementById('backButton');
 const accountButton = document.getElementById('accountButton');
@@ -132,6 +134,23 @@ function clearSubscriptions(){
   state.unsubscribers.forEach(unsub=>{ try{ unsub(); }catch(_e){} });
   state.unsubscribers = [];
 }
+function stopProfileStatusWatch(){
+  try{ profileStatusUnsubscribe?.(); }catch(_e){}
+  profileStatusUnsubscribe = null;
+}
+function watchProfileStatus(uid){
+  stopProfileStatusWatch();
+  if(!uid) return;
+  profileStatusUnsubscribe = userRef(uid).onSnapshot(async snap=>{
+    if(handlingAccountDisable || !snap.exists || snap.data().status !== 'disabled') return;
+    handlingAccountDisable = true;
+    clearSubscriptions();
+    state.profile = snap.data();
+    try{ await auth.signOut(); }catch(_e){}
+    renderLogin('Ce compte WB Carnet a été désactivé.');
+    handlingAccountDisable = false;
+  },error=>console.warn('Surveillance du compte WB Carnet',error));
+}
 function openModal(title, bodyHtml){
   closeModal();
   const wrapper = document.createElement('div');
@@ -150,6 +169,10 @@ async function ensureAuthorizedProfile(user){
   const ref = userRef(user.uid);
   const snap = await ref.get();
   const existing = snap.exists ? snap.data() : null;
+  if(existing?.status === 'disabled'){
+    state.profile = {...existing,uid:user.uid,phone:user.phoneNumber || existing.phone || ''};
+    return state.profile;
+  }
   if(existing?.status === 'active'){
     await ref.set({
       uid:user.uid,
@@ -236,11 +259,17 @@ async function confirmSmsCode(code){
       return;
     }
     const profile = await ensureAuthorizedProfile(credential.user);
+    if(profile?.status === 'disabled'){
+      await auth.signOut();
+      renderLogin('Ce compte WB Carnet a été désactivé.');
+      return;
+    }
     if(!profile){
       await auth.signOut();
       renderLogin('Ce numéro ne dispose pas encore d’une invitation activée.');
       return;
     }
+    watchProfileStatus(credential.user.uid);
     await showVehicleList();
   }catch(error){
     throw new Error(firebaseAuthMessage(error));
@@ -442,6 +471,7 @@ async function acceptInvitation(token,user){
     });
   });
   await ensureAuthorizedProfile(user);
+  watchProfileStatus(user.uid);
   if(targetVehicleId && targetPlateKey){
     try{ await mergeOwnedSamePlateVehicles(targetVehicleId,targetPlateKey); }
     catch(error){ console.warn('Fusion différée',error); showToast('Accès activé. La fusion pourra être relancée plus tard.'); }
@@ -829,7 +859,7 @@ async function deleteOperation(sourceVehicleId,operationId){
 function renderAccount(){
   document.body.classList.remove('landing-mode');
   state.route='account';setHeader({back:true,account:false,subtitle:'Compte'});
-  appEl.innerHTML=`<section class="screen"><div class="card"><div class="card-head"><h1>Mon compte</h1></div><div class="card-body"><div class="account-line"><span>Identifiant</span><strong>${escapeHtml(formatPhone(auth.currentUser?.phoneNumber||''))}</strong></div><div class="account-line"><span>Accès WB Carnet</span><strong>Autorisé</strong></div><div class="account-line"><span>Véhicules accessibles</span><strong>${state.userVehicles.length}</strong></div><div class="actions"><button class="btn danger block" id="signOut" type="button">Se déconnecter</button></div></div></div></section>`;
+  appEl.innerHTML=`<section class="screen"><div class="card"><div class="card-head"><h1>Mon compte</h1></div><div class="card-body"><div class="account-line"><span>Identifiant</span><strong>${escapeHtml(formatPhone(auth.currentUser?.phoneNumber||''))}</strong></div><div class="account-line"><span>Accès WB Carnet</span><strong>${state.profile?.status==='active'?'Autorisé':'Non autorisé'}</strong></div><div class="account-line"><span>Véhicules accessibles</span><strong>${state.userVehicles.length}</strong></div><div class="actions"><button class="btn danger block" id="signOut" type="button">Se déconnecter</button></div></div></div></section>`;
   document.getElementById('signOut').addEventListener('click',async()=>{await auth.signOut();state.inviteToken='';history.replaceState({},document.title,location.pathname);renderLogin();});
 }
 
@@ -843,7 +873,7 @@ backButton.addEventListener('click',()=>{
 accountButton.addEventListener('click',renderAccount);
 
 async function boot(){
-  if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js?v=5.6',{updateViaCache:'none'}).catch(()=>{})); }
+  if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js?v=6',{updateViaCache:'none'}).catch(()=>{})); }
   await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
   auth.onAuthStateChanged(async user=>{
     state.user=user;
@@ -852,13 +882,18 @@ async function boot(){
       return;
     }
     if(!user){
+      stopProfileStatusWatch();
       renderLogin();
       return;
     }
     setLoading('Vérification de votre accès…');
     try{
       const profile = await ensureAuthorizedProfile(user);
-      if(profile){
+      if(profile?.status === 'disabled'){
+        await auth.signOut();
+        renderLogin('Ce compte WB Carnet a été désactivé.');
+      }else if(profile){
+        watchProfileStatus(user.uid);
         await showVehicleList();
       }else{
         await auth.signOut();
