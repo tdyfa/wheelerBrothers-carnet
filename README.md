@@ -1,6 +1,11 @@
 <!--
 HISTORIQUE DES VERSIONS
 
+v8.1
+- Le titre de l’en-tête devient simplement « Carnet ».
+- La version est déplacée sous la carte « Mon compte ».
+- Ajout d’une pastille verte ou rouge indiquant l’état de connexion Firebase.
+
 v8
 - Ajout du bouton Rapport sur les opérations issues du Générateur WheelerBrothers.
 - Chargement sécurisé du rapport source et de ses photos.
@@ -14,7 +19,7 @@ v6
 - Désactivation globale d’un compte WB Carnet.
 -->
 
-# WheelerBrothers Carnet — version 8
+# WheelerBrothers Carnet — version 8.1
 
 WB Carnet reste accessible uniquement après une invitation créée depuis WheelerBrothers Atelier.
 

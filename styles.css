@@ -134,6 +134,21 @@ input[readonly]{color:#505866;background:#eef1f5}
 .invite-row strong{text-align:right}
 .account-line{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)}
 .account-line:last-child{border-bottom:0}
+
+.account-version-status{
+  display:flex;align-items:center;justify-content:center;gap:7px;
+  margin:2px 0 18px;color:var(--muted);font-size:11.5px;font-weight:750
+}
+.firebase-status-icon{
+  width:9px;height:9px;flex:0 0 9px;border-radius:50%;
+  background:#d92d20;box-shadow:0 0 0 2px rgba(217,45,32,.14)
+}
+.firebase-status-icon.is-connected{
+  background:#22c55e;box-shadow:0 0 0 2px rgba(34,197,94,.14)
+}
+.firebase-status-icon.is-disconnected{
+  background:#d92d20;box-shadow:0 0 0 2px rgba(217,45,32,.14)
+}
 @media(max-width:720px){
   .app-shell{padding:14px 12px 28px}
   .vehicle-grid{grid-template-columns:1fr}

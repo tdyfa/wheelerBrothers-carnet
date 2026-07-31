@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '8';
+const APP_VERSION = '8.1';
 const INVITATION_TTL_MS = 24 * 60 * 60 * 1000;
 const C = Object.freeze({
   users: 'wbCarnetUsers',
@@ -35,7 +35,25 @@ let handlingAccountDisable = false;
 const backButton = document.getElementById('backButton');
 const accountButton = document.getElementById('accountButton');
 const subtitleEl = document.getElementById('appSubtitle');
-subtitleEl.textContent = `Version ${APP_VERSION}`;
+subtitleEl.textContent = '';
+
+let firebaseConnectionState = false;
+
+function setFirebaseConnectionStatus(connected){
+  firebaseConnectionState = Boolean(connected && navigator.onLine && auth.currentUser);
+  document.querySelectorAll('[data-firebase-status]').forEach(indicator=>{
+    indicator.classList.toggle('is-connected', firebaseConnectionState);
+    indicator.classList.toggle('is-disconnected', !firebaseConnectionState);
+    const label = firebaseConnectionState ? 'Firebase connecté' : 'Firebase déconnecté';
+    indicator.setAttribute('aria-label', label);
+    indicator.setAttribute('title', label);
+  });
+}
+
+window.addEventListener('online', ()=>{
+  setFirebaseConnectionStatus(Boolean(auth.currentUser && state.profile?.status === 'active'));
+});
+window.addEventListener('offline', ()=>setFirebaseConnectionStatus(false));
 
 function escapeHtml(value){
   return String(value ?? '')
@@ -386,7 +404,7 @@ function showToast(message){
   clearTimeout(state.toastTimer);
   state.toastTimer = setTimeout(()=>toast.classList.remove('show'),2600);
 }
-function setHeader({back=false,account=Boolean(state.user),subtitle=`Version ${APP_VERSION}`,landing=false}={}){
+function setHeader({back=false,account=Boolean(state.user),subtitle='',landing=false}={}){
   document.body.classList.toggle('landing-mode',Boolean(landing));
   backButton.classList.toggle('hidden',!back);
   accountButton.classList.toggle('hidden',!account);
@@ -408,14 +426,19 @@ function watchProfileStatus(uid){
   stopProfileStatusWatch();
   if(!uid) return;
   profileStatusUnsubscribe = userRef(uid).onSnapshot(async snap=>{
+    if(snap.exists && snap.data().status === 'active') setFirebaseConnectionStatus(true);
     if(handlingAccountDisable || !snap.exists || snap.data().status !== 'disabled') return;
     handlingAccountDisable = true;
     clearSubscriptions();
     state.profile = snap.data();
+    setFirebaseConnectionStatus(false);
     try{ await auth.signOut(); }catch(_e){}
     renderLogin('Ce compte WB Carnet a été désactivé.');
     handlingAccountDisable = false;
-  },error=>console.warn('Surveillance du compte WB Carnet',error));
+  },error=>{
+    setFirebaseConnectionStatus(false);
+    console.warn('Surveillance du compte WB Carnet',error);
+  });
 }
 function openModal(title, bodyHtml){
   closeModal();
@@ -825,6 +848,7 @@ async function showVehicleList(){
   const uid = auth.currentUser.uid;
   const unsub = db.collection(C.users).doc(uid).collection('vehicles').where('status','==','active').onSnapshot(async snap=>{
     try{
+      setFirebaseConnectionStatus(true);
       const pointers = snap.docs.map(doc=>({id:doc.id,...doc.data()}));
       const vehicles = [];
       for(const pointer of pointers){
@@ -838,9 +862,11 @@ async function showVehicleList(){
       state.userVehicles=vehicles;
       renderVehicleList();
     }catch(error){
+      setFirebaseConnectionStatus(false);
       appEl.innerHTML=`<div class="notice error">Impossible de charger les véhicules : ${escapeHtml(error.message)}</div>`;
     }
   },error=>{
+    setFirebaseConnectionStatus(false);
     appEl.innerHTML=`<div class="notice error">Impossible de charger les véhicules : ${escapeHtml(error.message)}</div>`;
   });
   state.unsubscribers.push(unsub);
@@ -1182,8 +1208,9 @@ async function deleteOperation(sourceVehicleId,operationId){
 function renderAccount(){
   document.body.classList.remove('landing-mode');
   state.route='account';setHeader({back:true,account:false,subtitle:'Compte'});
-  appEl.innerHTML=`<section class="screen"><div class="card"><div class="card-head"><h1>Mon compte</h1></div><div class="card-body"><div class="account-line"><span>Identifiant</span><strong>${escapeHtml(formatPhone(auth.currentUser?.phoneNumber||''))}</strong></div><div class="account-line"><span>Accès WB Carnet</span><strong>${state.profile?.status==='active'?'Autorisé':'Non autorisé'}</strong></div><div class="account-line"><span>Véhicules accessibles</span><strong>${state.userVehicles.length}</strong></div><div class="actions"><button class="btn danger block" id="signOut" type="button">Se déconnecter</button></div></div></div></section>`;
-  document.getElementById('signOut').addEventListener('click',async()=>{await auth.signOut();state.inviteToken='';history.replaceState({},document.title,location.pathname);renderLogin();});
+  appEl.innerHTML=`<section class="screen account-screen"><div class="card"><div class="card-head"><h1>Mon compte</h1></div><div class="card-body"><div class="account-line"><span>Identifiant</span><strong>${escapeHtml(formatPhone(auth.currentUser?.phoneNumber||''))}</strong></div><div class="account-line"><span>Accès WB Carnet</span><strong>${state.profile?.status==='active'?'Autorisé':'Non autorisé'}</strong></div><div class="account-line"><span>Véhicules accessibles</span><strong>${state.userVehicles.length}</strong></div><div class="actions"><button class="btn danger block" id="signOut" type="button">Se déconnecter</button></div></div></div><div class="account-version-status"><span class="firebase-status-icon is-disconnected" data-firebase-status role="status" aria-label="Firebase déconnecté" title="Firebase déconnecté"></span><span>Version ${APP_VERSION}</span></div></section>`;
+  setFirebaseConnectionStatus(firebaseConnectionState);
+  document.getElementById('signOut').addEventListener('click',async()=>{setFirebaseConnectionStatus(false);await auth.signOut();state.inviteToken='';history.replaceState({},document.title,location.pathname);renderLogin();});
 }
 
 backButton.addEventListener('click',()=>{
@@ -1196,7 +1223,7 @@ backButton.addEventListener('click',()=>{
 accountButton.addEventListener('click',renderAccount);
 
 async function boot(){
-  if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js?v=8',{updateViaCache:'none'}).catch(()=>{})); }
+  if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js?v=8.1',{updateViaCache:'none'}).catch(()=>{})); }
   await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
   auth.onAuthStateChanged(async user=>{
     state.user=user;
@@ -1206,6 +1233,7 @@ async function boot(){
     }
     if(!user){
       stopProfileStatusWatch();
+      setFirebaseConnectionStatus(false);
       renderLogin();
       return;
     }
@@ -1216,6 +1244,7 @@ async function boot(){
         await auth.signOut();
         renderLogin('Ce compte WB Carnet a été désactivé.');
       }else if(profile){
+        setFirebaseConnectionStatus(true);
         watchProfileStatus(user.uid);
         await showVehicleList();
       }else{
@@ -1223,6 +1252,7 @@ async function boot(){
         renderLogin('Ce numéro ne dispose pas encore d’une invitation activée.');
       }
     }catch(error){
+      setFirebaseConnectionStatus(false);
       console.error('Vérification accès',error);
       await auth.signOut().catch(()=>{});
       renderLogin('Impossible de vérifier votre autorisation. Réessaie plus tard.');
