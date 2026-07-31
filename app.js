@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '7';
+const APP_VERSION = '8';
 const INVITATION_TTL_MS = 24 * 60 * 60 * 1000;
 const C = Object.freeze({
   users: 'wbCarnetUsers',
@@ -935,6 +935,53 @@ function subscribeOperations(vehicle){
   });
   state.unsubscribers.push(...state._operationUnsubs);
 }
+
+async function downloadSharedReport(operation,button){
+  if(!operation?.reportId || !operation?.reportSpaceId){
+    showToast('Le rapport lié à cette opération est indisponible.');
+    return;
+  }
+  if(!window.WBReportPdf){
+    showToast('Le moteur PDF n’est pas chargé. Recharge WB Carnet.');
+    return;
+  }
+  const original=button?.textContent || 'Rapport';
+  if(button){ button.disabled=true; button.textContent='Chargement…'; }
+  try{
+    const snap=await db.collection('spaces')
+      .doc(operation.reportSpaceId)
+      .collection('reports')
+      .doc(operation.reportId)
+      .get();
+    if(!snap.exists) throw new Error('Le rapport n’existe plus.');
+    const data=snap.data() || {};
+    if(typeof data.payload!=='string' || !data.payload.trim()) throw new Error('Le contenu du rapport est indisponible.');
+    let payload;
+    try{ payload=JSON.parse(data.payload); }
+    catch(_error){ throw new Error('Le rapport enregistré est illisible.'); }
+    if(button) button.textContent='Génération…';
+    await window.WBReportPdf.download(payload,{
+      storage,
+      defaultLogo:`report-cover-logo.png?v=${APP_VERSION}`
+    });
+    showToast('Rapport généré.');
+  }catch(error){
+    console.error('Génération du rapport partagé impossible',error);
+    const code=String(error?.code || '');
+    if(code.includes('permission-denied') || code.includes('storage/unauthorized') || code.includes('storage-read-denied')){
+      showToast('Accès au rapport refusé ou révoqué.');
+    }else if(code.includes('storage-object-not-found')){
+      showToast('Une photo du rapport n’existe plus.');
+    }else if(code.includes('firebase-storage-cors')){
+      showToast('Les photos ne peuvent pas être lues pour générer le PDF.');
+    }else{
+      showToast(error?.message || 'Impossible de générer le rapport.');
+    }
+  }finally{
+    if(button){ button.disabled=false; button.textContent=original; }
+  }
+}
+
 function renderVehicleDetail(){
   const v=state.currentVehicle;
   if(!v) return;
@@ -945,11 +992,16 @@ function renderVehicleDetail(){
     const personal=op.source==='personal';
     const editable=personal && op.createdBy===auth.currentUser.uid;
     const sourceLabel=personal ? 'Ajouté dans WB Carnet' : 'WheelerBrothers · lecture seule';
+    const hasReport=!personal && op.sourceType==='rapport' && Boolean(op.reportId) && Boolean(op.reportSpaceId);
+    const actionButtons=[
+      hasReport?`<button class="btn ghost small" data-report-op="${escapeHtml(op.id)}" data-source-vehicle="${escapeHtml(op._vehicleId)}" type="button">Rapport</button>`:'',
+      editable?`<button class="btn ghost small" data-edit-op="${escapeHtml(op.id)}" data-source-vehicle="${escapeHtml(op._vehicleId)}" type="button">Modifier</button><button class="btn danger small" data-delete-op="${escapeHtml(op.id)}" data-source-vehicle="${escapeHtml(op._vehicleId)}" type="button">Supprimer</button>`:''
+    ].filter(Boolean).join('');
     return `<article class="operation">
       <div class="operation-top"><div class="operation-title">${escapeHtml(op.title || 'Intervention')}</div><div class="operation-date">${escapeHtml(formatDate(op.date))}</div></div>
       ${op.details?`<div class="operation-details">${escapeHtml(op.details)}</div>`:''}
       <div class="operation-meta"><span class="badge ${personal?'muted':'ok'}">${escapeHtml(sourceLabel)}</span>${op.mileage?`<span class="badge muted">${escapeHtml(formatMileage(op.mileage))}</span>`:''}${op.performedBy?`<span class="badge muted">Réalisé par ${escapeHtml(op.performedBy)}</span>`:''}</div>
-      ${editable?`<div class="operation-actions"><button class="btn ghost small" data-edit-op="${escapeHtml(op.id)}" data-source-vehicle="${escapeHtml(op._vehicleId)}" type="button">Modifier</button><button class="btn danger small" data-delete-op="${escapeHtml(op.id)}" data-source-vehicle="${escapeHtml(op._vehicleId)}" type="button">Supprimer</button></div>`:''}
+      ${actionButtons?`<div class="operation-actions">${actionButtons}</div>`:''}
     </article>`;
   }).join('');
   appEl.innerHTML=`
@@ -964,6 +1016,10 @@ function renderVehicleDetail(){
   document.getElementById('addOperation')?.addEventListener('click',()=>renderOperationForm());
   document.getElementById('addOperationEmpty')?.addEventListener('click',()=>renderOperationForm());
   document.getElementById('exportHistory')?.addEventListener('click',exportCurrentVehicleHistory);
+  appEl.querySelectorAll('[data-report-op]').forEach(button=>button.addEventListener('click',()=>{
+    const op=state.operations.find(item=>item.id===button.dataset.reportOp && item._vehicleId===button.dataset.sourceVehicle);
+    if(op) downloadSharedReport(op,button);
+  }));
   document.getElementById('editVehicle')?.addEventListener('click',()=>renderVehicleForm(v));
   document.getElementById('deleteVehicle')?.addEventListener('click',deleteCurrentVehicle);
   appEl.querySelectorAll('[data-edit-op]').forEach(button=>button.addEventListener('click',()=>{
@@ -1140,7 +1196,7 @@ backButton.addEventListener('click',()=>{
 accountButton.addEventListener('click',renderAccount);
 
 async function boot(){
-  if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js?v=7',{updateViaCache:'none'}).catch(()=>{})); }
+  if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js?v=8',{updateViaCache:'none'}).catch(()=>{})); }
   await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
   auth.onAuthStateChanged(async user=>{
     state.user=user;

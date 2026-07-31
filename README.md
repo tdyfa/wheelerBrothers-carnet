@@ -1,23 +1,37 @@
 <!--
 HISTORIQUE DES VERSIONS
 
+v8
+- Ajout du bouton Rapport sur les opérations issues du Générateur WheelerBrothers.
+- Chargement sécurisé du rapport source et de ses photos.
+- Génération locale du PDF avec le même moteur et la même mise en page que l’Atelier.
+- Aucun PDF supplémentaire stocké dans Firebase.
+
 v7
-- Ajout de « Exporter l’historique » sur chaque fiche véhicule.
-- PDF au même format et avec la même mise en page que l’export du Carnet d’atelier.
-- Inclusion des opérations personnelles et des opérations WheelerBrothers visibles sur la fiche.
+- Export de l’historique complet d’un véhicule.
 
 v6
-- Prise en charge de la désactivation globale d’un compte WB Carnet.
-- Déconnexion immédiate d’une session active lorsque le compte est désactivé depuis WheelerBrothers.
-- Blocage des créations et lectures par les règles Firestore tant que le compte est désactivé.
-- Réactivation possible uniquement au moyen d’une nouvelle invitation WheelerBrothers valide.
-
-v5.7
-- Correction de l’activation des invitations avant accès à la fiche protégée.
+- Désactivation globale d’un compte WB Carnet.
 -->
 
-# WheelerBrothers Carnet v7
+# WheelerBrothers Carnet — version 8
 
 WB Carnet reste accessible uniquement après une invitation créée depuis WheelerBrothers Atelier.
 
-Lorsqu’un compte est désactivé globalement, il est déconnecté, ne peut plus accéder à ses véhicules et ne peut plus créer d’opérations. Une nouvelle invitation valide peut le réactiver ; les anciens accès ne sont pas restaurés automatiquement.
+## Bouton Rapport
+
+Une opération synchronisée depuis un rapport affiche le bouton **Rapport**. Lors du clic :
+
+1. WB Carnet vérifie que le compte possède toujours un accès actif au véhicule ;
+2. le rapport source est récupéré dans Firestore ;
+3. ses photos existantes sont chargées depuis Firebase Storage ;
+4. le PDF est généré localement avec la mise en page du Générateur WheelerBrothers ;
+5. le fichier est téléchargé sur l’appareil.
+
+Aucun PDF n’est conservé dans Firebase.
+
+## Déploiement
+
+Placer tous les fichiers à la racine du dépôt GitHub Pages `wheelerBrothers-carnet`.
+
+Publier ensuite les règles Firestore et Storage fournies dans le dossier Firebase du paquet complet.

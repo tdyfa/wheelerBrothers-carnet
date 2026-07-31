@@ -24,4 +24,5 @@ try{
 }
 const db = wbCarnetFirebaseApp.firestore();
 const auth = wbCarnetFirebaseApp.auth();
+const storage = wbCarnetFirebaseApp.storage();
 auth.languageCode = 'fr';
