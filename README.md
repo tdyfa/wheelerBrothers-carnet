@@ -1,6 +1,12 @@
 <!--
 HISTORIQUE DES VERSIONS
 
+v8.2
+- Correction de l’export PDF de l’historique lorsqu’une opération est trop longue pour tenir sur une page.
+- Une opération longue commence désormais dans l’espace disponible puis continue sur la page suivante.
+- L’en-tête du tableau est répété sur chaque page de continuation.
+- La date et le kilométrage restent affichés uniquement au début de l’opération.
+
 v8.1
 - Le titre de l’en-tête devient simplement « Carnet ».
 - La version est déplacée sous la carte « Mon compte ».
@@ -19,7 +25,7 @@ v6
 - Désactivation globale d’un compte WB Carnet.
 -->
 
-# WheelerBrothers Carnet — version 8.1
+# WheelerBrothers Carnet — version 8.2
 
 WB Carnet reste accessible uniquement après une invitation créée depuis WheelerBrothers Atelier.
 

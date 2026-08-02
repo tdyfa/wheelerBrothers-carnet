@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '8.1';
+const APP_VERSION = '8.2';
 const INVITATION_TTL_MS = 24 * 60 * 60 * 1000;
 const C = Object.freeze({
   users: 'wbCarnetUsers',
@@ -236,6 +236,11 @@ async function exportCurrentVehicleHistory(){
   const H = 1754;
   const margin = 82;
   const contentW = W-margin*2;
+  const pageBottom = H-90;
+  const operationTextX = margin+465;
+  const operationTextW = contentW-485;
+  const rowTopPadding = 14;
+  const rowBottomPadding = 18;
   const pages = [];
   const firstDate = operations[0]?.date ? formatHistoryDate(operations[0].date) : '—';
   const lastDate = operations[operations.length-1]?.date ? formatHistoryDate(operations[operations.length-1].date) : '—';
@@ -276,6 +281,14 @@ async function exportCurrentVehicleHistory(){
     y += 38;
     ctx.fillRect(margin,y,contentW,3);
     y += 12;
+  };
+  const startContinuationPage = ()=>{
+    newPage();
+    ctx.font = 'bold 27px Arial';
+    ctx.fillStyle = '#111';
+    ctx.fillText(`Historique — ${vehicle.model || 'Véhicule'}`,margin,y);
+    y += 52;
+    drawTableHeader();
   };
 
   newPage();
@@ -328,37 +341,85 @@ async function exportCurrentVehicleHistory(){
     if(operation.performedBy) detailsParts.push(`Réalisé par : ${operation.performedBy}`);
     const details = detailsParts.join(' — ');
     ctx.font = 'bold 24px Arial';
-    const titleLines = historyTextLines(ctx,title,contentW-485);
+    const titleLines = historyTextLines(ctx,title,operationTextW);
     ctx.font = '21px Arial';
-    const detailLines = details ? historyTextLines(ctx,details,contentW-485) : [];
-    const rowH = Math.max(78,18+titleLines.length*31+(detailLines.length?8+detailLines.length*28:0)+18);
-    if(y+rowH > H-90){
-      finishPage();
-      newPage();
-      ctx.font = 'bold 27px Arial';
-      ctx.fillText(`Historique — ${vehicle.model || 'Véhicule'}`,margin,y);
-      y += 52;
-      drawTableHeader();
+    const detailLines = details ? historyTextLines(ctx,details,operationTextW) : [];
+    const tokens = [
+      ...titleLines.map(text=>({text,font:'bold 24px Arial',color:'#111',lineHeight:31})),
+      ...(detailLines.length ? [
+        {gap:7},
+        ...detailLines.map(text=>({text,font:'21px Arial',color:'#444',lineHeight:28}))
+      ] : [])
+    ];
+
+    let tokenIndex = 0;
+    let firstSegment = true;
+    while(tokenIndex < tokens.length){
+      if(tokens[tokenIndex]?.gap) tokenIndex++;
+      if(tokenIndex >= tokens.length) break;
+
+      const nextLineHeight = tokens[tokenIndex].lineHeight || 28;
+      const minimumSegmentHeight = Math.max(78,rowTopPadding+nextLineHeight+rowBottomPadding);
+      if(pageBottom-y < minimumSegmentHeight){
+        finishPage();
+        startContinuationPage();
+        continue;
+      }
+
+      const segmentY = y;
+      const availableHeight = pageBottom-segmentY;
+      const drawItems = [];
+      let usedHeight = rowTopPadding;
+
+      while(tokenIndex < tokens.length){
+        const token = tokens[tokenIndex];
+        if(token.gap){
+          const following = tokens[tokenIndex+1];
+          if(!following){ tokenIndex++; continue; }
+          if(usedHeight+token.gap+following.lineHeight+rowBottomPadding > availableHeight) break;
+          usedHeight += token.gap;
+          tokenIndex++;
+          continue;
+        }
+        if(usedHeight+token.lineHeight+rowBottomPadding > availableHeight) break;
+        drawItems.push({token,top:segmentY+usedHeight});
+        usedHeight += token.lineHeight;
+        tokenIndex++;
+      }
+
+      if(drawItems.length === 0){
+        finishPage();
+        startContinuationPage();
+        continue;
+      }
+
+      const segmentHeight = Math.max(78,usedHeight+rowBottomPadding);
+      if(firstSegment){
+        ctx.fillStyle = '#111';
+        ctx.font = 'bold 22px Arial';
+        ctx.fillText(formatHistoryDate(operation.date),margin,segmentY+17);
+        ctx.font = '22px Arial';
+        ctx.fillText(operation.mileage ? `${Number(operation.mileage).toLocaleString('fr-FR')} km` : '—',margin+230,segmentY+17);
+      }
+      drawItems.forEach(({token,top})=>{
+        ctx.fillStyle = token.color;
+        ctx.font = token.font;
+        ctx.fillText(token.text,operationTextX,top);
+      });
+      ctx.strokeStyle = '#d9dde4';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(margin,segmentY+segmentHeight);
+      ctx.lineTo(W-margin,segmentY+segmentHeight);
+      ctx.stroke();
+      y = segmentY+segmentHeight;
+      firstSegment = false;
+
+      if(tokenIndex < tokens.length){
+        finishPage();
+        startContinuationPage();
+      }
     }
-    ctx.fillStyle = '#111';
-    ctx.font = 'bold 22px Arial';
-    ctx.fillText(formatHistoryDate(operation.date),margin,y+17);
-    ctx.font = '22px Arial';
-    ctx.fillText(operation.mileage ? `${Number(operation.mileage).toLocaleString('fr-FR')} km` : '—',margin+230,y+17);
-    ctx.font = 'bold 24px Arial';
-    const textY = drawHistoryLines(ctx,titleLines,margin+465,y+14,31);
-    if(detailLines.length){
-      ctx.fillStyle = '#444';
-      ctx.font = '21px Arial';
-      drawHistoryLines(ctx,detailLines,margin+465,textY+7,28);
-    }
-    ctx.strokeStyle = '#d9dde4';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(margin,y+rowH);
-    ctx.lineTo(W-margin,y+rowH);
-    ctx.stroke();
-    y += rowH;
   }
   finishPage();
 
@@ -374,6 +435,7 @@ async function exportCurrentVehicleHistory(){
   link.remove();
   setTimeout(()=>URL.revokeObjectURL(url),60000);
 }
+
 function randomToken(){
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
@@ -1223,7 +1285,7 @@ backButton.addEventListener('click',()=>{
 accountButton.addEventListener('click',renderAccount);
 
 async function boot(){
-  if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js?v=8.1',{updateViaCache:'none'}).catch(()=>{})); }
+  if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js?v=8.2',{updateViaCache:'none'}).catch(()=>{})); }
   await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
   auth.onAuthStateChanged(async user=>{
     state.user=user;
