@@ -1,6 +1,12 @@
 <!--
 HISTORIQUE DES VERSIONS
 
+v8.3
+- Suppression de la création de véhicules depuis WB Carnet.
+- Les nouvelles fiches véhicule proviennent désormais uniquement de WheelerBrothers – Atelier.
+- Les anciennes fiches personnelles existantes restent accessibles et ne sont pas supprimées.
+- Le formulaire de création est verrouillé côté application, y compris s’il est appelé sans passer par l’interface.
+
 v8.2
 - Correction de l’export PDF de l’historique lorsqu’une opération est trop longue pour tenir sur une page.
 - Une opération longue commence désormais dans l’espace disponible puis continue sur la page suivante.
@@ -25,7 +31,7 @@ v6
 - Désactivation globale d’un compte WB Carnet.
 -->
 
-# WheelerBrothers Carnet — version 8.2
+# WheelerBrothers Carnet — version 8.3
 
 WB Carnet reste accessible uniquement après une invitation créée depuis WheelerBrothers Atelier.
 

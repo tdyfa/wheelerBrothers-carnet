@@ -1,12 +1,12 @@
-const CACHE_NAME = 'wb-carnet-v8.2';
+const CACHE_NAME = 'wb-carnet-v8.3';
 const ASSETS = [
   './',
   './index.html',
-  './styles.css?v=8.2',
-  './app.js?v=8.2',
-  './firebase-config.js?v=8.2',
-  './report-pdf-engine.js?v=8.2',
-  './manifest.json?v=8.2',
+  './styles.css?v=8.3',
+  './app.js?v=8.3',
+  './firebase-config.js?v=8.3',
+  './report-pdf-engine.js?v=8.3',
+  './manifest.json?v=8.3',
   './apple-touch-icon.png',
   './icon-192.png',
   './icon-512.png',

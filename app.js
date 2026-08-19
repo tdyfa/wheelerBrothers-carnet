@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '8.2';
+const APP_VERSION = '8.3';
 const INVITATION_TTL_MS = 24 * 60 * 60 * 1000;
 const C = Object.freeze({
   users: 'wbCarnetUsers',
@@ -948,11 +948,9 @@ function renderVehicleList(){
     </article>`).join('');
   appEl.innerHTML=`
     <section class="screen">
-      <div class="page-head"><div><h1>Mes véhicules</h1><p>Vos carnets personnels et les véhicules partagés avec vous.</p></div><button class="btn" id="addVehicle" type="button">+ Ajouter un véhicule</button></div>
-      ${state.userVehicles.length ? `<div class="vehicle-grid">${cards}</div>` : `<div class="card empty-state"><h2>Aucun véhicule</h2><p>Créez votre première fiche véhicule. Votre compte a été autorisé par une invitation WheelerBrothers.</p><button class="btn" id="addVehicleEmpty" type="button">Ajouter un véhicule</button></div>`}
+      <div class="page-head"><div><h1>Mes véhicules</h1><p>Les véhicules partagés avec vous depuis WheelerBrothers – Atelier.</p></div></div>
+      ${state.userVehicles.length ? `<div class="vehicle-grid">${cards}</div>` : `<div class="card empty-state"><h2>Aucun véhicule</h2><p>Les véhicules apparaîtront ici après leur partage depuis WheelerBrothers – Atelier.</p></div>`}
     </section>`;
-  document.getElementById('addVehicle')?.addEventListener('click',()=>renderVehicleForm());
-  document.getElementById('addVehicleEmpty')?.addEventListener('click',()=>renderVehicleForm());
   appEl.querySelectorAll('[data-vehicle-id]').forEach(card=>{
     const open=()=>openVehicle(card.dataset.vehicleId);
     card.addEventListener('click',open);
@@ -1189,14 +1187,17 @@ async function deleteCurrentVehicle(){
 
 function renderVehicleForm(vehicle=null){
   document.body.classList.remove('landing-mode');
-  const editing=Boolean(vehicle);
-  state.route=editing?'vehicle-edit':'vehicle-new';
-  setHeader({back:true,account:true,subtitle:editing?'Modifier la fiche':'Nouveau véhicule'});
-  appEl.innerHTML=`<section class="screen"><div class="card"><div class="card-head"><h1>${editing?'Modifier le véhicule':'Ajouter un véhicule'}</h1><p>${editing?'Les changements seront visibles par toutes les personnes autorisées.':'Cette fiche peut rester personnelle ou être partagée ensuite avec vos proches.'}</p></div><form class="card-body" id="vehicleForm">
+  if(!vehicle){
+    showToast('La création de véhicules se fait uniquement depuis WheelerBrothers – Atelier.');
+    return showVehicleList();
+  }
+  state.route='vehicle-edit';
+  setHeader({back:true,account:true,subtitle:'Modifier la fiche'});
+  appEl.innerHTML=`<section class="screen"><div class="card"><div class="card-head"><h1>Modifier le véhicule</h1><p>Les changements seront visibles par toutes les personnes autorisées.</p></div><form class="card-body" id="vehicleForm">
     <div class="form-grid"><div class="field"><label for="vehicleModel">Modèle</label><input type="text" id="vehicleModel" placeholder="Audi A3" value="${escapeHtml(vehicle?.model||'')}" required></div><div class="field"><label for="vehicleEngine">Motorisation</label><input type="text" id="vehicleEngine" placeholder="2.0 TDI 140" value="${escapeHtml(vehicle?.engine||'')}"></div><div class="field"><label for="vehiclePlate">Immatriculation</label><input type="text" id="vehiclePlate" autocapitalize="characters" placeholder="AB-123-CD" value="${escapeHtml(vehicle?.plate||'')}" required></div><div class="field"><label for="vehicleOwner">Propriétaire</label><input type="text" id="vehicleOwner" placeholder="Jean Dupont" value="${escapeHtml(vehicle?.ownerName||'')}"></div></div>
-    <div class="actions"><button class="btn" id="vehicleSave" type="submit">${editing?'Enregistrer':'Créer la fiche'}</button><button class="btn ghost" id="vehicleCancel" type="button">Annuler</button></div><div class="status" id="vehicleStatus"></div>
+    <div class="actions"><button class="btn" id="vehicleSave" type="submit">Enregistrer</button><button class="btn ghost" id="vehicleCancel" type="button">Annuler</button></div><div class="status" id="vehicleStatus"></div>
   </form></div></section>`;
-  document.getElementById('vehicleCancel').addEventListener('click',()=>editing?openVehicle(vehicle.id):showVehicleList());
+  document.getElementById('vehicleCancel').addEventListener('click',()=>openVehicle(vehicle.id));
   document.getElementById('vehicleForm').addEventListener('submit',async event=>{
     event.preventDefault();
     const status=document.getElementById('vehicleStatus');const button=document.getElementById('vehicleSave');
@@ -1208,21 +1209,9 @@ function renderVehicleForm(vehicle=null){
     if(!model||!plateKey){status.className='status error';status.textContent='Le modèle et l’immatriculation sont obligatoires.';return;}
     status.className='status';status.textContent='Enregistrement…';button.disabled=true;
     try{
-      if(editing){
-        await vehicleRef(vehicle.id).update({model,engine,plate,plateKey,ownerName,updatedAt:serverTimestamp()});
-        showToast('Fiche mise à jour.');
-        await openVehicle(vehicle.id);
-      }else{
-        const duplicate=state.userVehicles.find(item=>item.plateKey===plateKey);
-        if(duplicate) throw new Error('Vous avez déjà une fiche active avec cette immatriculation.');
-        const uid=auth.currentUser.uid;const ref=db.collection(C.vehicles).doc();const batch=db.batch();
-        batch.set(ref,{model,engine,plate,plateKey,ownerName,origin:'personal',status:'active',createdBy:uid,mergedInto:null,mergedFrom:[],createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
-        batch.set(memberRef(ref.id,uid),{uid,phone:auth.currentUser.phoneNumber||'',role:'owner',status:'active',activatedAt:serverTimestamp(),updatedAt:serverTimestamp()});
-        batch.set(userVehicleRef(uid,ref.id),{uid,vehicleId:ref.id,role:'owner',status:'active',plateKey,addedAt:serverTimestamp(),updatedAt:serverTimestamp()});
-        await batch.commit();
-        showToast('Véhicule ajouté.');
-        await openVehicle(ref.id);
-      }
+      await vehicleRef(vehicle.id).update({model,engine,plate,plateKey,ownerName,updatedAt:serverTimestamp()});
+      showToast('Fiche mise à jour.');
+      await openVehicle(vehicle.id);
     }catch(error){status.className='status error';status.textContent=error.message;button.disabled=false;}
   });
 }
@@ -1285,7 +1274,7 @@ backButton.addEventListener('click',()=>{
 accountButton.addEventListener('click',renderAccount);
 
 async function boot(){
-  if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js?v=8.2',{updateViaCache:'none'}).catch(()=>{})); }
+  if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js?v=8.3',{updateViaCache:'none'}).catch(()=>{})); }
   await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
   auth.onAuthStateChanged(async user=>{
     state.user=user;
