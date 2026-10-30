@@ -202,3 +202,12 @@ body.landing-mode .centered-screen{min-height:0}
   body.landing-mode{padding:16px;padding-top:max(16px, env(safe-area-inset-top));padding-bottom:max(16px, env(safe-area-inset-bottom))}
   .landing-box{padding:28px 20px;border-radius:18px}
 }
+
+/* iOS Safari: avoid automatic zoom on focused form controls. */
+@media (max-width: 768px) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}
