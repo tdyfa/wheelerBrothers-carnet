@@ -1,9 +1,9 @@
-const CACHE_NAME = 'wb-carnet-v8.4';
+const CACHE_NAME = 'wb-carnet-v8.4-r2';
 const ASSETS = [
   './',
   './index.html',
   './styles.css?v=8.4',
-  './app.js?v=8.4',
+  './app.js?v=8.4&build=2',
   './firebase-config.js?v=8.4',
   './report-pdf-engine.js?v=8.4',
   './manifest.json?v=8.4',
@@ -14,7 +14,7 @@ const ASSETS = [
 ];
 
 self.addEventListener('install', event => {
-  event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS)));
+  event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS.map(url => new Request(url, { cache: 'reload' })))));
   self.skipWaiting();
 });
 
@@ -30,7 +30,7 @@ self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
   if(url.origin !== self.location.origin) return;
   event.respondWith(
-    fetch(event.request)
+    fetch(event.request, { cache: 'no-store' })
       .then(response => {
         const copy = response.clone();
         caches.open(CACHE_NAME).then(cache => cache.put(event.request, copy));
