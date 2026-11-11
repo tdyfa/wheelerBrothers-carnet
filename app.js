@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '8.4';
+const APP_VERSION = '9.0';
 const INVITATION_TTL_MS = 24 * 60 * 60 * 1000;
 const C = Object.freeze({
   users: 'wbCarnetUsers',
@@ -1034,11 +1034,18 @@ async function downloadSharedReport(operation,button){
   const original=button?.textContent || 'Rapport';
   if(button){ button.disabled=true; button.textContent='Chargement…'; }
   try{
-    const snap=await db.collection('spaces')
-      .doc(operation.reportSpaceId)
-      .collection('reports')
-      .doc(operation.reportId)
-      .get();
+    const root=db.collection('spaces').doc(operation.reportSpaceId);
+    let snap;
+    try{snap=await root.collection('publishedReports').doc(operation.reportId).get({source:'server'});}
+    catch(error){
+      if(operation.reportPublication==='v56'||!['permission-denied','not-found'].some(code=>String(error.code||'').includes(code)))throw error;
+    }
+    // Legacy reports remain readable until explicitly adopted by Atelier v56.
+    // A v56 operation never falls back to a private draft.
+    if(!snap?.exists){
+      if(operation.reportPublication==='v56')throw new Error('Le rapport a été retiré du partage.');
+      snap=await root.collection('reports').doc(operation.reportId).get({source:'server'});
+    }
     if(!snap.exists) throw new Error('Le rapport n’existe plus.');
     const data=snap.data() || {};
     if(typeof data.payload!=='string' || !data.payload.trim()) throw new Error('Le contenu du rapport est indisponible.');
@@ -1274,7 +1281,7 @@ backButton.addEventListener('click',()=>{
 accountButton.addEventListener('click',renderAccount);
 
 async function boot(){
-  if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js?v=8.4&build=2',{updateViaCache:'none'}).catch(()=>{})); }
+  if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js?v=9.0&build=1',{updateViaCache:'none'}).catch(()=>{})); }
   await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
   auth.onAuthStateChanged(async user=>{
     state.user=user;

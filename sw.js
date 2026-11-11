@@ -1,12 +1,12 @@
-const CACHE_NAME = 'wb-carnet-v8.4-r2';
+const CACHE_NAME = 'wb-carnet-v9.0-r2';
 const ASSETS = [
   './',
   './index.html',
-  './styles.css?v=8.4',
-  './app.js?v=8.4&build=2',
-  './firebase-config.js?v=8.4',
-  './report-pdf-engine.js?v=8.4',
-  './manifest.json?v=8.4',
+  './styles.css?v=9.0',
+  './app.js?v=9.0&build=1',
+  './firebase-config.js?v=9.0',
+  './report-pdf-engine.js?v=9.0',
+  './manifest.json?v=9.0',
   './apple-touch-icon.png',
   './icon-192.png',
   './icon-512.png',
@@ -20,7 +20,7 @@ self.addEventListener('install', event => {
 
 self.addEventListener('activate', event => {
   event.waitUntil(
-    caches.keys().then(keys => Promise.all(keys.filter(key => key !== CACHE_NAME).map(key => caches.delete(key))))
+    caches.keys().then(keys => Promise.all(keys.filter(key => key.startsWith('wb-carnet-') && key !== CACHE_NAME).map(key => caches.delete(key))))
   );
   self.clients.claim();
 });
