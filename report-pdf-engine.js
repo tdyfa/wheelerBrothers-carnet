@@ -259,7 +259,6 @@ async function renderReportPdfPages(state,options={}){
   const s=normalizeReportState(state);
   const pages=[];
   const imageCache=options.imageCache||new Map();
-  const logo=await loadReportPdfImage(s.logo||options.defaultLogo||'report-cover-logo.png',imageCache);
   const contentW=REPORT_PDF_W-REPORT_PDF_MARGIN*2;
   const newCanvas=()=>{
     const canvas=document.createElement('canvas');
@@ -269,14 +268,7 @@ async function renderReportPdfPages(state,options={}){
     ctx.textBaseline='top';ctx.fillStyle='#101216';
     return {canvas,ctx,y:REPORT_PDF_MARGIN};
   };
-  const drawWatermark=page=>{
-    if(!logo)return;
-    const maxW=190,maxH=82;
-    const ratio=Math.min(maxW/logo.width,maxH/logo.height);
-    page.ctx.save();page.ctx.globalAlpha=.09;
-    page.ctx.drawImage(logo,REPORT_PDF_W-REPORT_PDF_MARGIN-logo.width*ratio,28,logo.width*ratio,logo.height*ratio);
-    page.ctx.restore();
-  };
+  const drawWatermark=()=>{};
   const finish=page=>pages.push({dataUrl:page.canvas.toDataURL('image/jpeg',.94),width:page.canvas.width,height:page.canvas.height});
   const contentPage=(title)=>{
     const page=newCanvas();drawWatermark(page);
@@ -291,11 +283,7 @@ async function renderReportPdfPages(state,options={}){
   /* Couverture */
   {
     const p=newCanvas(),ctx=p.ctx;
-    if(logo){
-      const maxW=520,maxH=230,ratio=Math.min(maxW/logo.width,maxH/logo.height);
-      ctx.drawImage(logo,(REPORT_PDF_W-logo.width*ratio)/2,p.y,logo.width*ratio,logo.height*ratio);
-      p.y+=logo.height*ratio+65;
-    }else p.y+=80;
+    p.y+=80;
     ctx.textAlign='center';ctx.fillStyle='#101216';ctx.font='bold 48px Arial';
     ctx.fillText(s.title||"RAPPORT D'INTERVENTION",REPORT_PDF_W/2,p.y);p.y+=68;
     ctx.fillRect(REPORT_PDF_W/2-180,p.y,360,5);p.y+=38;
@@ -343,12 +331,26 @@ async function renderReportPdfPages(state,options={}){
       p.ctx.strokeStyle='#d9dde4';p.ctx.lineWidth=2;p.ctx.beginPath();p.ctx.moveTo(REPORT_PDF_MARGIN,p.y+58);p.ctx.lineTo(REPORT_PDF_W-REPORT_PDF_MARGIN,p.y+58);p.ctx.stroke();
       p.y+=66;
     }
-    if(s.products){
-      const img=await loadReportPdfImage(s.products,imageCache);
+    const products=Array.isArray(s.productsPhotos)&&s.productsPhotos.length
+      ?s.productsPhotos.filter(photo=>photo&&photo.src)
+      :(s.products?[{src:s.products,cap:''}]:[]);
+    if(products.length===1){
+      const img=await loadReportPdfImage(products[0].src,imageCache);
       if(p.y+500>REPORT_PDF_H-REPORT_PDF_MARGIN){finish(p);p=contentPage('Produits / pièces utilisés');}
       pdfDrawContain(p.ctx,img,REPORT_PDF_MARGIN,p.y,contentW,Math.min(600,REPORT_PDF_H-p.y-REPORT_PDF_MARGIN-45),{border:true,background:'#fafbfc'});
     }
     finish(p);
+    if(products.length>1){
+      let page=contentPage('Produits / pièces utilisés');
+      for(let i=0;i<products.length;i++){
+        if(i>0&&i%2===0){finish(page);page=contentPage('Produits / pièces utilisés (suite)');}
+        const img=await loadReportPdfImage(products[i].src,imageCache);
+        pdfDrawContain(page.ctx,img,REPORT_PDF_MARGIN,page.y,contentW,640,{border:true,background:'#fafbfc'});
+        page.y+=665;
+        if(products[i].cap){page.ctx.fillStyle='#475569';page.ctx.font='20px Arial';page.ctx.fillText(String(products[i].cap).slice(0,120),REPORT_PDF_MARGIN,page.y);page.y+=32;}
+      }
+      finish(page);
+    }
   }
 
   /* Détail des prestations */
@@ -530,8 +532,7 @@ async function renderReportPdfPages(state,options={}){
   async function downloadReportPdf(state,options={}){
     storage=options.storage||null;
     const pages=await renderReportPdfPages(state,{
-      imageCache:options.imageCache||new Map(),
-      defaultLogo:options.defaultLogo||'report-cover-logo.png'
+      imageCache:options.imageCache||new Map()
     });
     if(!pages.length) throw new Error('Aucune page générée');
     const blob=buildReportImagePdf(pages);
