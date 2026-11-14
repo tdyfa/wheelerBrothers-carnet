@@ -208,6 +208,15 @@ function pdfDrawContain(ctx,img,x,y,w,h,{border=false,background='#fff'}={}){
 async function loadReportPdfImage(src,cache){
   if(!src)return null;
   if(cache.has(src))return cache.get(src);
+  // A4 pages are rasterised at 1240px wide: avoid decoding dozens of
+  // 12/48-megapixel originals into memory on iOS.
+  const MAX_DECODED_IMAGES=3;
+  while(cache.size>=MAX_DECODED_IMAGES){
+    const key=cache.keys().next().value;
+    const old=cache.get(key);
+    cache.delete(key);
+    try{ const image=await old; if(image&&typeof image.close==='function')image.close();else if(image&&image.__wbPdfCanvas){image.width=0;image.height=0;} }catch(e){}
+  }
   const promise=(async()=>{
     let lastError=null;
     for(let attempt=0;attempt<2;attempt++){
@@ -216,18 +225,41 @@ async function loadReportPdfImage(src,cache){
         if(!blob||!blob.size) throw new Error('Image vide');
         if('createImageBitmap' in window){
           try{
-            const bitmap=await createImageBitmap(blob,{imageOrientation:'from-image'});
+            // Decode a display-sized bitmap, keeping the source file untouched.
+            // Most report photos are displayed at <= 1064px on the A4 page.
+            let bitmap;
+            try{
+              const probe=await createImageBitmap(blob,{imageOrientation:'from-image'});
+              const scale=Math.min(1,1400/Math.max(probe.width,probe.height));
+              if(scale<1){
+                const w=Math.max(1,Math.round(probe.width*scale));
+                const h=Math.max(1,Math.round(probe.height*scale));
+                probe.close();
+                bitmap=await createImageBitmap(blob,{imageOrientation:'from-image',resizeWidth:w,resizeHeight:h,resizeQuality:'high'});
+              }else bitmap=probe;
+            }catch(e){
+              // Safari implementations with limited resize options still work.
+              bitmap=await createImageBitmap(blob);
+            }
             if(bitmap&&bitmap.width&&bitmap.height)return bitmap;
           }catch(e){ lastError=e; }
         }
         const objectUrl=URL.createObjectURL(blob);
         try{
-          return await new Promise((resolve,reject)=>{
-            const img=new Image();
-            img.onload=()=>resolve(img);
-            img.onerror=()=>reject(new Error('Décodage de l’image impossible'));
-            img.src=objectUrl;
+          const img=await new Promise((resolve,reject)=>{
+            const image=new Image();
+            image.onload=()=>resolve(image);
+            image.onerror=()=>reject(new Error('Décodage de l’image impossible'));
+            image.src=objectUrl;
           });
+          const scale=Math.min(1,1400/Math.max(img.naturalWidth||img.width,img.naturalHeight||img.height));
+          if(scale>=1)return img;
+          const reduced=document.createElement('canvas');
+          reduced.width=Math.max(1,Math.round(img.width*scale));
+          reduced.height=Math.max(1,Math.round(img.height*scale));
+          reduced.getContext('2d').drawImage(img,0,0,reduced.width,reduced.height);
+          reduced.__wbPdfCanvas=true;
+          return reduced;
         }finally{
           URL.revokeObjectURL(objectUrl);
         }
@@ -269,7 +301,11 @@ async function renderReportPdfPages(state,options={}){
     return {canvas,ctx,y:REPORT_PDF_MARGIN};
   };
   const drawWatermark=()=>{};
-  const finish=page=>pages.push({dataUrl:page.canvas.toDataURL('image/jpeg',.94),width:page.canvas.width,height:page.canvas.height});
+  const finish=page=>{
+    pages.push({dataUrl:page.canvas.toDataURL('image/jpeg',.94),width:page.canvas.width,height:page.canvas.height});
+    // Release the ~9MB canvas backing store immediately after encoding.
+    page.canvas.width=0;page.canvas.height=0;
+  };
   const contentPage=(title)=>{
     const page=newCanvas();drawWatermark(page);
     if(title){
@@ -529,11 +565,14 @@ async function renderReportPdfPages(state,options={}){
 }
 
 
+  let downloadInProgress=false;
   async function downloadReportPdf(state,options={}){
+    if(downloadInProgress)throw new Error('Une génération PDF est déjà en cours.');
+    downloadInProgress=true;
     storage=options.storage||null;
-    const pages=await renderReportPdfPages(state,{
-      imageCache:options.imageCache||new Map()
-    });
+    const imageCache=new Map();
+    try{
+    const pages=await renderReportPdfPages(state,{imageCache});
     if(!pages.length) throw new Error('Aucune page générée');
     const blob=buildReportImagePdf(pages);
     const url=URL.createObjectURL(blob);
@@ -549,6 +588,13 @@ async function renderReportPdfPages(state,options={}){
       setTimeout(()=>URL.revokeObjectURL(url),60000);
     }
     return blob;
+    }finally{
+      for(const pending of imageCache.values()){
+        try{const image=await pending;if(image&&typeof image.close==='function')image.close();else if(image&&image.__wbPdfCanvas){image.width=0;image.height=0;}}catch(e){}
+      }
+      imageCache.clear();
+      downloadInProgress=false;
+    }
   }
 
   global.WBReportPdf={
