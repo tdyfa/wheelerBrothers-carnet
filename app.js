@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '9.2';
+const APP_VERSION = '9.3';
 const INVITATION_TTL_MS = 24 * 60 * 60 * 1000;
 const C = Object.freeze({
   users: 'wbCarnetUsers',
@@ -1281,7 +1281,7 @@ backButton.addEventListener('click',()=>{
 accountButton.addEventListener('click',renderAccount);
 
 async function boot(){
-  if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js?v=9.2&build=1',{updateViaCache:'none'}).catch(()=>{})); }
+  if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js?v=9.3&build=1',{updateViaCache:'none'}).catch(()=>{})); }
   await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
   auth.onAuthStateChanged(async user=>{
     state.user=user;

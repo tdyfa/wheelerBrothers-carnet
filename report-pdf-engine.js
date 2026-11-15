@@ -291,6 +291,10 @@ async function renderReportPdfPages(state,options={}){
   const s=normalizeReportState(state);
   const pages=[];
   const imageCache=options.imageCache||new Map();
+  const sources=new Set(),seen=new Set();
+  const scan=(v,k='')=>{if(!v)return;if(typeof v==='string'&&['src','overview','products','logo','labelR','labelV','baieAvant','baieApres'].includes(k)&&/^(https?:|data:image|blob:)/.test(v))sources.add(v);else if(Array.isArray(v))v.forEach(x=>scan(x));else if(typeof v==='object')Object.entries(v).forEach(([key,x])=>scan(x,key));};
+  scan(s);
+  const track=async(src)=>{const img=await loadReportPdfImage(src,imageCache);if(src&&!seen.has(src)){seen.add(src);options.onProgress?.('Photos préparées',seen.size,Math.max(seen.size,sources.size),`${seen.size} / ${Math.max(seen.size,sources.size)} images`);}return img;};
   const contentW=REPORT_PDF_W-REPORT_PDF_MARGIN*2;
   const newCanvas=()=>{
     const canvas=document.createElement('canvas');
@@ -302,6 +306,7 @@ async function renderReportPdfPages(state,options={}){
   };
   const drawWatermark=()=>{};
   const finish=page=>{
+    options.onPageProgress?.(pages.length+1);
     pages.push({dataUrl:page.canvas.toDataURL('image/jpeg',.94),width:page.canvas.width,height:page.canvas.height});
     // Release the ~9MB canvas backing store immediately after encoding.
     page.canvas.width=0;page.canvas.height=0;
@@ -344,7 +349,7 @@ async function renderReportPdfPages(state,options={}){
     });
     p.y+=rows.length*rowH+34;
     if(s.overview){
-      const img=await loadReportPdfImage(s.overview,imageCache);
+      const img=await track(s.overview,imageCache);
       const available=Math.max(220,REPORT_PDF_H-p.y-150);
       pdfDrawContain(ctx,img,REPORT_PDF_MARGIN,p.y,contentW,available,{border:true,background:'#fafbfc'});
       p.y+=available;
@@ -371,7 +376,7 @@ async function renderReportPdfPages(state,options={}){
       ?s.productsPhotos.filter(photo=>photo&&photo.src)
       :(s.products?[{src:s.products,cap:''}]:[]);
     if(products.length===1){
-      const img=await loadReportPdfImage(products[0].src,imageCache);
+      const img=await track(products[0].src,imageCache);
       if(p.y+500>REPORT_PDF_H-REPORT_PDF_MARGIN){finish(p);p=contentPage('Produits / pièces utilisés');}
       pdfDrawContain(p.ctx,img,REPORT_PDF_MARGIN,p.y,contentW,Math.min(600,REPORT_PDF_H-p.y-REPORT_PDF_MARGIN-45),{border:true,background:'#fafbfc'});
     }
@@ -380,7 +385,7 @@ async function renderReportPdfPages(state,options={}){
       let page=contentPage('Produits / pièces utilisés');
       for(let i=0;i<products.length;i++){
         if(i>0&&i%2===0){finish(page);page=contentPage('Produits / pièces utilisés (suite)');}
-        const img=await loadReportPdfImage(products[i].src,imageCache);
+        const img=await track(products[i].src,imageCache);
         pdfDrawContain(page.ctx,img,REPORT_PDF_MARGIN,page.y,contentW,640,{border:true,background:'#fafbfc'});
         page.y+=665;
         if(products[i].cap){page.ctx.fillStyle='#475569';page.ctx.font='20px Arial';page.ctx.fillText(String(products[i].cap).slice(0,120),REPORT_PDF_MARGIN,page.y);page.y+=32;}
@@ -457,8 +462,8 @@ async function renderReportPdfPages(state,options={}){
         for(let row=0;row<rows;row++){
           if(fixedRows&&rowsOnPage>=fixedRows){nextPage();rowsOnPage=0;fixedImageH=0;}
           const itemL=L[row],itemR=R[row];
-          const imgL=itemL?await loadReportPdfImage(itemL.src,imageCache):null;
-          const imgR=itemR?await loadReportPdfImage(itemR.src,imageCache):null;
+          const imgL=itemL?await track(itemL.src,imageCache):null;
+          const imgR=itemR?await track(itemR.src,imageCache):null;
           const captionReserve=36,rowGap=26;
           let imageH=480;
           if(fixedRows){
@@ -494,7 +499,7 @@ async function renderReportPdfPages(state,options={}){
             ensure(imageH+(row.some(x=>x.cap)?captionReserve:0)+rowGap);
           }
           for(let j=0;j<row.length;j++){
-            const item=row[j],img=await loadReportPdfImage(item.src,imageCache),x=REPORT_PDF_MARGIN+j*(colW+gap);
+            const item=row[j],img=await track(item.src,imageCache),x=REPORT_PDF_MARGIN+j*(colW+gap);
             pdfDrawContain(p.ctx,img,x,p.y,colW,imageH,{border:true,background:'#fafbfc'});
             if(item.cap){p.ctx.fillStyle='#6b7280';p.ctx.font='18px Arial';p.ctx.textAlign='center';p.ctx.fillText(item.cap,x+colW/2,p.y+imageH+8);p.ctx.textAlign='left';}
           }
@@ -519,7 +524,7 @@ async function renderReportPdfPages(state,options={}){
     if(s.labelR||s.labelV){
       const items=[s.labelR,s.labelV].filter(Boolean),gap=28,w=(contentW-gap*(items.length-1))/items.length,h=520;
       for(let i=0;i<items.length;i++){
-        const img=await loadReportPdfImage(items[i],imageCache);pdfDrawContain(ctx,img,REPORT_PDF_MARGIN+i*(w+gap),p.y,w,h,{border:true,background:'#fafbfc'});
+        const img=await track(items[i],imageCache);pdfDrawContain(ctx,img,REPORT_PDF_MARGIN+i*(w+gap),p.y,w,h,{border:true,background:'#fafbfc'});
       }
       p.y+=h+35;
     }
@@ -542,7 +547,7 @@ async function renderReportPdfPages(state,options={}){
     const items=[];if(s.baieAvant)items.push(['Avant',s.baieAvant]);if(s.baieApres)items.push(['Après',s.baieApres]);
     const h=items.length===1?1250:590;
     for(const [label,src] of items){
-      const img=await loadReportPdfImage(src,imageCache);pdfDrawContain(p.ctx,img,REPORT_PDF_MARGIN,p.y,contentW,h,{border:true,background:'#fafbfc'});
+      const img=await track(src,imageCache);pdfDrawContain(p.ctx,img,REPORT_PDF_MARGIN,p.y,contentW,h,{border:true,background:'#fafbfc'});
       p.ctx.fillStyle='#101216';p.ctx.font='bold 22px Arial';p.ctx.textAlign='center';p.ctx.fillText(label.toUpperCase(),REPORT_PDF_W/2,p.y+h+8);p.ctx.textAlign='left';p.y+=h+50;
     }
     finish(p);
@@ -556,7 +561,7 @@ async function renderReportPdfPages(state,options={}){
         p.ctx.fillStyle='#101216';p.ctx.font='bold 34px Arial';p.ctx.fillText('Facture des pièces',REPORT_PDF_MARGIN,p.y);p.y+=70;
         p.ctx.fillStyle='#6b7280';p.ctx.font='24px Arial';p.ctx.fillText('Cette facture PDF doit être réimportée sous forme d’image.',REPORT_PDF_MARGIN,p.y);
       }else{
-        const img=await loadReportPdfImage(inv.src,imageCache);pdfDrawContain(p.ctx,img,REPORT_PDF_MARGIN,REPORT_PDF_MARGIN,contentW,REPORT_PDF_H-REPORT_PDF_MARGIN*2,{background:'#fff'});
+        const img=await track(inv.src,imageCache);pdfDrawContain(p.ctx,img,REPORT_PDF_MARGIN,REPORT_PDF_MARGIN,contentW,REPORT_PDF_H-REPORT_PDF_MARGIN*2,{background:'#fff'});
       }
       finish(p);
     }
@@ -571,10 +576,13 @@ async function renderReportPdfPages(state,options={}){
     downloadInProgress=true;
     storage=options.storage||null;
     const imageCache=new Map();
+    const progress=global.WBProgress?.start('Génération PDF — WB Carnet');
     try{
-    const pages=await renderReportPdfPages(state,{imageCache});
+    const pages=await renderReportPdfPages(state,{imageCache,onProgress:(...args)=>progress?.update(...args),onPageProgress:n=>progress?.update('Composition des pages A4',null,null,`${n} pages préparées`)});
     if(!pages.length) throw new Error('Aucune page générée');
+    progress?.update('Assemblage du fichier PDF',0,1,`${pages.length} pages`);
     const blob=buildReportImagePdf(pages);
+    progress?.update('Assemblage du fichier PDF',1,1,`${pages.length} pages`);
     const url=URL.createObjectURL(blob);
     try{
       const link=document.createElement('a');
@@ -593,6 +601,7 @@ async function renderReportPdfPages(state,options={}){
         try{const image=await pending;if(image&&typeof image.close==='function')image.close();else if(image&&image.__wbPdfCanvas){image.width=0;image.height=0;}}catch(e){}
       }
       imageCache.clear();
+      progress?.close();
       downloadInProgress=false;
     }
   }
