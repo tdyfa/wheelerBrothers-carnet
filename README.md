@@ -1,6 +1,13 @@
 <!--
 HISTORIQUE DES VERSIONS
 
+v9.5
+- Documents personnels du véhicule activables par l’Atelier, consultation par les membres actifs et téléversement privé authentifié.
+- Serveur et règles adaptés nécessaires ; les anciens fichiers et configurations Firebase doivent être conservés.
+
+v9.4
+- Moteur PDF partagé améliorant la qualité des photos.
+
 v8.3
 - Suppression de la création de véhicules depuis WB Carnet.
 - Les nouvelles fiches véhicule proviennent désormais uniquement de WheelerBrothers – Atelier.
@@ -31,7 +38,7 @@ v6
 - Désactivation globale d’un compte WB Carnet.
 -->
 
-# WheelerBrothers Carnet — version 8.3
+# WheelerBrothers Carnet — version 9.5
 
 WB Carnet reste accessible uniquement après une invitation créée depuis WheelerBrothers Atelier.
 
@@ -51,4 +58,4 @@ Aucun PDF n’est conservé dans Firebase.
 
 Placer tous les fichiers à la racine du dépôt GitHub Pages `wheelerBrothers-carnet`.
 
-Publier ensuite les règles Firestore et Storage fournies dans le dossier Firebase du paquet complet.
+Suivre le guide de déploiement v9.5 : les règles effectives doivent être adaptées et déployées avec le serveur. Ne pas remplacer les configurations ni les règles réelles par des exemples historiques.

@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '9.4';
+const APP_VERSION = '9.5';
 const INVITATION_TTL_MS = 24 * 60 * 60 * 1000;
 const C = Object.freeze({
   users: 'wbCarnetUsers',
@@ -476,7 +476,15 @@ function setLoading(message='Chargement…'){
   setHeader({account:Boolean(state.user)});
   appEl.innerHTML = `<section class="screen centered-screen"><div class="card loading-card"><div class="spinner"></div><p>${escapeHtml(message)}</p></div></section>`;
 }
+window.WBCarnetDocuments?.configure({
+  db,auth,projectId:FIREBASE_CONFIG.projectId,escapeHtml,
+  notify:message=>showToast(message),
+  isAtelier:()=>state.currentMembership?.role==='atelier_admin',
+  changed:()=>{if(state.route==='vehicle'&&state.currentVehicle?.documentsEnabled===true)renderVehicleDetail();}
+});
+
 function clearSubscriptions(){
+  window.WBCarnetDocuments?.stop();
   state.unsubscribers.forEach(unsub=>{ try{ unsub(); }catch(_e){} });
   state.unsubscribers = [];
 }
@@ -986,6 +994,7 @@ function subscribeCurrentVehicle(){
     if(vehicle.mergedInto) return openVehicle(vehicle.mergedInto);
     const previousMerged = JSON.stringify(state.currentVehicle?.mergedFrom || []);
     state.currentVehicle=vehicle;
+    window.WBCarnetDocuments?.sync(vehicleId,vehicle.documentsEnabled===true);
     renderVehicleDetail();
     if(previousMerged !== JSON.stringify(vehicle.mergedFrom || [])) subscribeOperations(vehicle);
   });
@@ -1103,9 +1112,11 @@ function renderVehicleDetail(){
         <div class="vehicle-profile"><div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap"><div><h1>${escapeHtml(v.model || 'Véhicule')}</h1><span class="vehicle-plate">${escapeHtml(displayPlate(v.plate))}</span></div><span class="badge ${v.origin==='atelier'?'ok':'muted'}">${v.origin==='atelier'?'Fiche WheelerBrothers':'Fiche personnelle'}</span></div><div class="profile-facts" style="margin-top:15px"><span><strong>Propriétaire :</strong> ${escapeHtml(v.ownerName || 'Non renseigné')}</span><span><strong>Motorisation :</strong> ${escapeHtml(v.engine || 'Non renseignée')}</span></div></div>
         <div class="profile-actions"><button class="btn" id="addOperation" type="button">+ Ajouter une opération</button><button class="btn ghost" id="exportHistory" type="button">📄 Exporter l’historique</button>${canEditVehicle?'<button class="btn ghost" id="editVehicle" type="button">Modifier la fiche</button>':''}${v.origin==='personal' && v.createdBy===auth.currentUser.uid?'<button class="btn danger" id="deleteVehicle" type="button">Supprimer le véhicule</button>':''}</div>
       </article>
+      ${window.WBCarnetDocuments?.render() || ''}
       <div class="section-title">Historique des opérations</div>
       ${state.operations.length?`<div class="operation-list">${opsHtml}</div>`:`<div class="card empty-state"><h2>Aucune opération</h2><p>Ajoutez la première intervention réalisée sur ce véhicule.</p><button class="btn" id="addOperationEmpty" type="button">Ajouter une opération</button></div>`}
     </section>`;
+  window.WBCarnetDocuments?.bind(appEl);
   document.getElementById('addOperation')?.addEventListener('click',()=>renderOperationForm());
   document.getElementById('addOperationEmpty')?.addEventListener('click',()=>renderOperationForm());
   document.getElementById('exportHistory')?.addEventListener('click',exportCurrentVehicleHistory);
@@ -1281,7 +1292,7 @@ backButton.addEventListener('click',()=>{
 accountButton.addEventListener('click',renderAccount);
 
 async function boot(){
-  if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js?v=9.4&build=1',{updateViaCache:'none'}).catch(()=>{})); }
+  if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js?v=9.5&build=1',{updateViaCache:'none'}).catch(()=>{})); }
   await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
   auth.onAuthStateChanged(async user=>{
     state.user=user;
