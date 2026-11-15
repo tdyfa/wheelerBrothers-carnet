@@ -196,13 +196,18 @@ function pdfRoundRect(ctx,x,y,w,h,r,fill,stroke){
   if(fill)ctx.fill();if(stroke)ctx.stroke();
 }
 
+const reportPdfImageSources=new WeakMap();
+
 function pdfDrawContain(ctx,img,x,y,w,h,{border=false,background='#fff'}={}){
   ctx.fillStyle=background;ctx.fillRect(x,y,w,h);
   if(border){ctx.strokeStyle='#d9dde4';ctx.lineWidth=2;ctx.strokeRect(x,y,w,h);}
   if(!img||!img.width||!img.height)return;
   const ratio=Math.min(w/img.width,h/img.height);
   const dw=img.width*ratio,dh=img.height*ratio;
-  ctx.drawImage(img,x+(w-dw)/2,y+(h-dh)/2,dw,dh);
+  const dx=x+(w-dw)/2,dy=y+(h-dh)/2;
+  const src=reportPdfImageSources.get(img);
+  if(ctx.__wbPdfOverlays && src)ctx.__wbPdfOverlays.push({src,x:dx,y:dy,w:dw,h:dh});
+  else ctx.drawImage(img,dx,dy,dw,dh);
 }
 
 async function loadReportPdfImage(src,cache){
@@ -294,7 +299,7 @@ async function renderReportPdfPages(state,options={}){
   const sources=new Set(),seen=new Set();
   const scan=(v,k='')=>{if(!v)return;if(typeof v==='string'&&['src','overview','products','logo','labelR','labelV','baieAvant','baieApres'].includes(k)&&/^(https?:|data:image|blob:)/.test(v))sources.add(v);else if(Array.isArray(v))v.forEach(x=>scan(x));else if(typeof v==='object')Object.entries(v).forEach(([key,x])=>scan(x,key));};
   scan(s);
-  const track=async(src)=>{const img=await loadReportPdfImage(src,imageCache);if(src&&!seen.has(src)){seen.add(src);options.onProgress?.('Photos préparées',seen.size,Math.max(seen.size,sources.size),`${seen.size} / ${Math.max(seen.size,sources.size)} images`);}return img;};
+  const track=async(src)=>{const img=await loadReportPdfImage(src,imageCache);if(img&&src)reportPdfImageSources.set(img,src);if(src&&!seen.has(src)){seen.add(src);options.onProgress?.('Photos préparées',seen.size,Math.max(seen.size,sources.size),`${seen.size} / ${Math.max(seen.size,sources.size)} images`);}return img;};
   const contentW=REPORT_PDF_W-REPORT_PDF_MARGIN*2;
   const newCanvas=()=>{
     const canvas=document.createElement('canvas');
@@ -302,12 +307,13 @@ async function renderReportPdfPages(state,options={}){
     const ctx=canvas.getContext('2d');
     ctx.fillStyle='#fff';ctx.fillRect(0,0,canvas.width,canvas.height);
     ctx.textBaseline='top';ctx.fillStyle='#101216';
+    ctx.__wbPdfOverlays=[];
     return {canvas,ctx,y:REPORT_PDF_MARGIN};
   };
   const drawWatermark=()=>{};
   const finish=page=>{
     options.onPageProgress?.(pages.length+1);
-    pages.push({dataUrl:page.canvas.toDataURL('image/jpeg',.94),width:page.canvas.width,height:page.canvas.height});
+    pages.push({dataUrl:page.canvas.toDataURL('image/jpeg',.94),width:page.canvas.width,height:page.canvas.height,overlays:page.ctx.__wbPdfOverlays});
     // Release the ~9MB canvas backing store immediately after encoding.
     page.canvas.width=0;page.canvas.height=0;
   };
@@ -581,7 +587,8 @@ async function renderReportPdfPages(state,options={}){
     const pages=await renderReportPdfPages(state,{imageCache,onProgress:(...args)=>progress?.update(...args),onPageProgress:n=>progress?.update('Composition des pages A4',null,null,`${n} pages préparées`)});
     if(!pages.length) throw new Error('Aucune page générée');
     progress?.update('Assemblage du fichier PDF',0,1,`${pages.length} pages`);
-    const blob=buildReportImagePdf(pages);
+    if(!global.WBPDFWriter)throw new Error('Moteur PDF indisponible. Rechargez l’application.');
+    const blob=await global.WBPDFWriter.build(pages,{sourceAsBlob:pdfSourceAsBlob,onProgress:(done,total)=>progress?.update('Assemblage des photos',done,total)});
     progress?.update('Assemblage du fichier PDF',1,1,`${pages.length} pages`);
     const url=URL.createObjectURL(blob);
     try{
