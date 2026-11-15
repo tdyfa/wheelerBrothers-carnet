@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '9.5';
+const APP_VERSION = '10';
 const INVITATION_TTL_MS = 24 * 60 * 60 * 1000;
 const C = Object.freeze({
   users: 'wbCarnetUsers',
@@ -139,20 +139,21 @@ function historyTextLines(ctx,text,maxWidth){
   const lines = [];
   paragraphs.forEach((paragraph,pIndex)=>{
     const words = paragraph.split(/\s+/).filter(Boolean);
-    if(words.length === 0){
-      lines.push('');
-    }else{
+    if(words.length === 0){ lines.push(''); }
+    else {
       let line = '';
-      words.forEach(word=>{
-        const test = line ? `${line} ${word}` : word;
-        if(line && ctx.measureText(test).width > maxWidth){
-          lines.push(line);
-          line = word;
-        }else{
-          line = test;
+      for(const word of words){
+        const combined = line ? `${line} ${word}` : word;
+        if(ctx.measureText(combined).width <= maxWidth){ line=combined; continue; }
+        if(line){ lines.push(line); line=''; }
+        // Les noms de fichiers sans espace doivent rester dans la colonne.
+        for(const character of Array.from(word)){
+          const next=line+character;
+          if(line && ctx.measureText(next).width>maxWidth){lines.push(line);line=character;}
+          else line=next;
         }
-      });
-      if(line) lines.push(line);
+      }
+      if(line)lines.push(line);
     }
     if(pIndex < paragraphs.length - 1) lines.push('');
   });
@@ -217,20 +218,67 @@ function buildHistoryImagePdf(jpegPages,pageWidthPt=595.28,pageHeightPt=841.89){
   return new Blob(chunks,{type:'application/pdf'});
 }
 
-async function exportCurrentVehicleHistory(){
-  const vehicle = state.currentVehicle;
-  if(!vehicle) return;
-  const operations = [...state.operations].sort((first,second)=>{
-    const dateCompare = String(first.date || '').localeCompare(String(second.date || ''));
-    return dateCompare || String(first.id || '').localeCompare(String(second.id || ''));
+// L'export vérifie les documents sur le serveur : le cache local peut être
+// incomplet ou l'accès peut avoir été modifié depuis l'ouverture de la fiche.
+async function historyEntriesForVehicle(vehicleId, uid){
+  const sameSession=()=>state.currentVehicleId===vehicleId && auth.currentUser?.uid===uid;
+  const vehicleSnapshot=await vehicleRef(vehicleId).get({source:'server'});
+  if(!sameSession()||!vehicleSnapshot.exists)throw new Error('La fiche ou la session a changé pendant la préparation de l’export.');
+  const vehicleData=vehicleSnapshot.data()||{};
+  const enabled=vehicleData.documentsEnabled===true;
+  const sourceIds=[...new Set([vehicleId,...(Array.isArray(vehicleData.mergedFrom)?vehicleData.mergedFrom:[])])];
+  if(sourceIds.some(id=>typeof id!=='string'||!id||id.includes('/')))throw new Error('Les sources de l’historique sont invalides.');
+  // Ne pas utiliser les snapshots de l'interface : certains peuvent ne pas
+  // être encore arrivés ou avoir échoué, ce qui produirait un PDF incomplet.
+  const operationSnapshots=await Promise.all(sourceIds.map(id=>vehicleRef(id).collection('operations').get({source:'server'})));
+  if(!sameSession())throw new Error('La fiche ou la session a changé pendant la préparation de l’export.');
+  const sourceOperations=operationSnapshots.flatMap((snapshot,index)=>snapshot.docs.map(doc=>({id:doc.id,_vehicleId:sourceIds[index],...doc.data()})));
+  let documents=[];
+  if(enabled){
+    const snapshot=await vehicleRef(vehicleId).collection('documents').where('state','==','ready').get({source:'server'});
+    if(!sameSession())throw new Error('La fiche ou la session a changé pendant la préparation de l’export.');
+    documents=snapshot.docs.map(doc=>{
+      const data=doc.data()||{};
+      const nature=typeof data.nature==='string'?data.nature.trim():'';
+      const name=typeof data.name==='string'&&data.name.trim()?data.name.trim():'Document';
+      const date=typeof data.documentDate==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(data.documentDate)?data.documentDate:'';
+      const mileage=typeof data.mileage==='number'&&Number.isSafeInteger(data.mileage)&&data.mileage>=0?data.mileage:null;
+      return {id:'document:'+doc.id,date,mileage,title:nature?`Document : ${nature}`:'Document',details:name,historyDocument:true};
+    });
+  }
+  // Après la lecture, vérifier que l'option et la session sont toujours valides.
+  const confirmed=await vehicleRef(vehicleId).get({source:'server'});
+  const confirmedData=confirmed.exists?confirmed.data():null;
+  const confirmedSources=[...new Set([vehicleId,...(Array.isArray(confirmedData?.mergedFrom)?confirmedData.mergedFrom:[])])];
+  if(!sameSession()||!confirmed.exists||Boolean(confirmedData?.documentsEnabled===true)!==enabled||JSON.stringify(confirmedSources)!==JSON.stringify(sourceIds))
+    throw new Error('L’accès aux documents ou la fiche a changé. Réessayez l’export.');
+  const membership=await memberRef(vehicleId,uid).get({source:'server'});
+  if(!sameSession()||!membership.exists||membership.data()?.status!=='active')
+    throw new Error('Votre accès au véhicule ne permet plus cet export.');
+  const rows=[...sourceOperations.map(item=>({...item,historyDocument:false})),...documents];
+  rows.sort((a,b)=>{
+    // Les éléments sans date restent disponibles en fin de liste.
+    const da=String(a.date||''),db=String(b.date||'');
+    return (da&&!db?-1:!da&&db?1:da.localeCompare(db)) || String(a.id||'').localeCompare(String(b.id||''));
   });
+  return {rows,operationCount:sourceOperations.length,documentCount:documents.length};
+}
+let historyExportInProgress=false;
+async function exportCurrentVehicleHistory(){
+  const vehicle = state.currentVehicle,vehicleId=state.currentVehicleId,uid=auth.currentUser?.uid;
+  if(!vehicle||!vehicleId||!uid||historyExportInProgress)return;
+  historyExportInProgress=true;
+  try{
+  const summary=await historyEntriesForVehicle(vehicleId,uid);
+  const operations=summary.rows;
   if(operations.length === 0){
-    showToast("Aucune opération à inclure dans l'historique.");
+    showToast("Aucune opération ni document à inclure dans l'historique.");
     return;
   }
 
   let logo = null;
   try{ logo = await loadHistoryImage(`report-cover-logo.png?v=${APP_VERSION}`); }catch(_error){}
+  if(state.currentVehicleId!==vehicleId || auth.currentUser?.uid!==uid)throw new Error('La fiche ou la session a changé pendant l’export.');
 
   const W = 1240;
   const H = 1754;
@@ -242,8 +290,9 @@ async function exportCurrentVehicleHistory(){
   const rowTopPadding = 14;
   const rowBottomPadding = 18;
   const pages = [];
-  const firstDate = operations[0]?.date ? formatHistoryDate(operations[0].date) : '—';
-  const lastDate = operations[operations.length-1]?.date ? formatHistoryDate(operations[operations.length-1].date) : '—';
+  const datedEntries=operations.filter(entry=>entry.date);
+  const firstDate=datedEntries.length?formatHistoryDate(datedEntries[0].date):'—';
+  const lastDate=datedEntries.length?formatHistoryDate(datedEntries[datedEntries.length-1].date):'—';
   const generatedAt = new Date().toLocaleDateString('fr-FR');
 
   let canvas;
@@ -330,7 +379,8 @@ async function exportCurrentVehicleHistory(){
   ctx.strokeRect(margin,y,contentW,72);
   ctx.fillStyle = '#111';
   ctx.font = '23px Arial';
-  ctx.fillText(`${operations.length} opération${operations.length>1?'s':''} enregistrée${operations.length>1?'s':''}, du ${firstDate} au ${lastDate}.`,margin+20,y+23);
+  const counts=`${summary.operationCount} intervention${summary.operationCount>1?'s':''} · ${summary.documentCount} document${summary.documentCount>1?'s':''}`;
+  ctx.fillText(datedEntries.length?`${counts} · du ${firstDate} au ${lastDate}`:counts,margin+20,y+23);
   y += 108;
   drawTableHeader();
 
@@ -397,9 +447,10 @@ async function exportCurrentVehicleHistory(){
       if(firstSegment){
         ctx.fillStyle = '#111';
         ctx.font = 'bold 22px Arial';
-        ctx.fillText(formatHistoryDate(operation.date),margin,segmentY+17);
+        ctx.fillText(operation.historyDocument&&!operation.date?'':formatHistoryDate(operation.date),margin,segmentY+17);
         ctx.font = '22px Arial';
-        ctx.fillText(operation.mileage ? `${Number(operation.mileage).toLocaleString('fr-FR')} km` : '—',margin+230,segmentY+17);
+        const showMileage=operation.historyDocument ? operation.mileage!==null&&operation.mileage!==undefined : Boolean(operation.mileage);
+        ctx.fillText(showMileage ? `${Number(operation.mileage).toLocaleString('fr-FR')} km` : (operation.historyDocument?'':'—'),margin+230,segmentY+17);
       }
       drawItems.forEach(({token,top})=>{
         ctx.fillStyle = token.color;
@@ -434,6 +485,8 @@ async function exportCurrentVehicleHistory(){
   link.click();
   link.remove();
   setTimeout(()=>URL.revokeObjectURL(url),60000);
+  }catch(error){showToast('Export impossible : '+(error.message||'vérifiez la connexion et vos accès.'));}
+  finally{historyExportInProgress=false;}
 }
 
 function randomToken(){
@@ -477,7 +530,7 @@ function setLoading(message='Chargement…'){
   appEl.innerHTML = `<section class="screen centered-screen"><div class="card loading-card"><div class="spinner"></div><p>${escapeHtml(message)}</p></div></section>`;
 }
 window.WBCarnetDocuments?.configure({
-  db,auth,projectId:FIREBASE_CONFIG.projectId,escapeHtml,
+  db,auth,projectId:FIREBASE_CONFIG.projectId,escapeHtml,openModal,closeModal,
   notify:message=>showToast(message),
   isAtelier:()=>state.currentMembership?.role==='atelier_admin',
   changed:()=>{if(state.route==='vehicle'&&state.currentVehicle?.documentsEnabled===true)renderVehicleDetail();}
@@ -1292,7 +1345,7 @@ backButton.addEventListener('click',()=>{
 accountButton.addEventListener('click',renderAccount);
 
 async function boot(){
-  if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js?v=9.5&build=1',{updateViaCache:'none'}).catch(()=>{})); }
+  if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js?v=10&build=1',{updateViaCache:'none'}).catch(()=>{})); }
   await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
   auth.onAuthStateChanged(async user=>{
     state.user=user;

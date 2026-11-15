@@ -1,6 +1,12 @@
 <!--
 HISTORIQUE DES VERSIONS
 
+v10
+- Documents de véhicule : formulaire de nature, date et kilométrage et export vers l’historique.
+
+v9.6
+- Nature, date et kilométrage des documents et ajout à l’export de l’historique.
+
 v9.5
 - Documents personnels du véhicule activables par l’Atelier, consultation par les membres actifs et téléversement privé authentifié.
 - Serveur et règles adaptés nécessaires ; les anciens fichiers et configurations Firebase doivent être conservés.

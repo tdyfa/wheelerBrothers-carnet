@@ -1,5 +1,17 @@
 # Historique WB Carnet
 
+## 10
+
+- Livraison des documents de véhicule avec nature, date et kilométrage facultatifs dans l’historique.
+- Ajustement de la zone Documents et de son formulaire.
+
+
+## 9.6
+
+- Formulaire de documents : nature, date et kilométrage, avec reprise de ces informations dans l’export d’historique.
+- Ajustement des libellés et de l’espacement de la zone Documents.
+
+
 ## 9.5
 
 - Documents de véhicule activables par l’Atelier ; consultation par les membres actifs et accès serveur authentifié.
