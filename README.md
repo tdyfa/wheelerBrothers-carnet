@@ -1,6 +1,9 @@
 <!--
 HISTORIQUE DES VERSIONS
 
+v10.1
+- Barre de progression maintenue lors de la génération des PDF.
+
 v10
 - Documents de véhicule : formulaire de nature, date et kilométrage et export vers l’historique.
 

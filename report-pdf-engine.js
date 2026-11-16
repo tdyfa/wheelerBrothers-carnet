@@ -584,12 +584,20 @@ async function renderReportPdfPages(state,options={}){
     const imageCache=new Map();
     const progress=global.WBProgress?.start('Génération PDF — WB Carnet');
     try{
-    const pages=await renderReportPdfPages(state,{imageCache,onProgress:(...args)=>progress?.update(...args),onPageProgress:n=>progress?.update('Composition des pages A4',null,null,`${n} pages préparées`)});
+    // Keep a measurable image-preparation bar visible; page composition must
+    // not replace it with an indeterminate status after each finished page.
+    progress?.update('Photos préparées',0,1,'Chargement des images…');
+    const pages=await renderReportPdfPages(state,{imageCache,onProgress:(...args)=>progress?.update(...args)});
     if(!pages.length) throw new Error('Aucune page générée');
-    progress?.update('Assemblage du fichier PDF',0,1,`${pages.length} pages`);
+    progress?.update('Assemblage du fichier PDF',0,pages.length+1,'Finalisation du document…');
     if(!global.WBPDFWriter)throw new Error('Moteur PDF indisponible. Rechargez l’application.');
-    const blob=await global.WBPDFWriter.build(pages,{sourceAsBlob:pdfSourceAsBlob,onProgress:(done,total)=>progress?.update('Assemblage des photos',done,total)});
-    progress?.update('Assemblage du fichier PDF',1,1,`${pages.length} pages`);
+    // Writer progress counts pages; reserve one final step until build returns
+    // so that 100% means the PDF bytes have actually been assembled.
+    const blob=await global.WBPDFWriter.build(pages,{sourceAsBlob:pdfSourceAsBlob,onProgress:(done,total)=>{
+      if(Number.isFinite(done)&&Number.isFinite(total)&&total>0)
+        progress?.update('Assemblage du fichier PDF',Math.min(done,total),total+1,'Finalisation du document…');
+    }});
+    progress?.update('Assemblage du fichier PDF',1,1,'Document prêt');
     const url=URL.createObjectURL(blob);
     try{
       const link=document.createElement('a');

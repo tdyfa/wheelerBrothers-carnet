@@ -1,5 +1,10 @@
 # Historique WB Carnet
 
+## 10.1
+
+- La progression des photos et de l’assemblage PDF reste visible sans alternance avec le nombre de pages.
+
+
 ## 10
 
 - Livraison des documents de véhicule avec nature, date et kilométrage facultatifs dans l’historique.
