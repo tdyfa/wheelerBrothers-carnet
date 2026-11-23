@@ -111,5 +111,90 @@
     add(`trailer\n<< /Size ${nextId} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`);
     return new Blob(chunks,{type:'application/pdf'});
   }
-  global.WBPDFWriter={build};
+  // Incremental variant: append one completed page at a time. The original
+  // source loader may therefore release each page's temporary input blobs as
+  // soon as addPage resolves. The final PDF chunks still occupy memory.
+  function createIncremental({sourceAsBlob}={}){
+    if(typeof sourceAsBlob!=='function')throw new Error('Chargeur photo PDF absent.');
+    const W=595.28,H=841.89;
+    let chunks=[],offsets=[0],length=0,nextId=3,state='active',busy=false;
+    const pageIds=[],seen=new Map();
+    const ensureActive=()=>{if(state!=='active')throw new Error('Assemblage PDF interrompu.');};
+    function add(x){ensureActive();if(typeof x==='string')x=enc.encode(x);chunks.push(x);length+=x.size===undefined?x.length:x.size;}
+    function object(id,body){ensureActive();offsets[id]=length;add(`${id} 0 obj\n`);body();add('\nendobj\n');}
+    function stream(id,dict,bytes){object(id,()=>{add(`<< ${dict} /Length ${bytes.size===undefined?bytes.length:bytes.size} >>\nstream\n`);add(bytes);add('\nendstream');});}
+    function release(){chunks=[];offsets=[];pageIds.length=0;seen.clear();length=0;}
+    add('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n');
+    object(1,()=>add('<< /Type /Catalog /Pages 2 0 R >>'));
+    const matrices=[[1,0,0,1,0,0],[-1,0,0,1,1,0],[-1,0,0,-1,1,1],[1,0,0,-1,0,1],[0,-1,-1,0,1,1],[0,-1,1,0,0,1],[0,1,1,0,0,0],[0,1,-1,0,1,0]];
+    async function imageObject(blob){
+      const head=new Uint8Array(await blob.slice(0,1048576).arrayBuffer());ensureActive();
+      const jpeg=jpegInfo(head);
+      if(jpeg){
+        const id=nextId++;
+        stream(id,`/Type /XObject /Subtype /Image /Width ${jpeg.width} /Height ${jpeg.height} /ColorSpace /Device${jpeg.components===1?'Gray':'RGB'} /BitsPerComponent 8 /Filter /DCTDecode`,blob);
+        return {id,orientation:jpeg.orientation};
+      }
+      const im=await encodedPixels(blob);ensureActive();let maskId=null;
+      if(im.mask){maskId=nextId++;stream(maskId,`/Type /XObject /Subtype /Image /Width ${im.width} /Height ${im.height} /ColorSpace /DeviceGray /BitsPerComponent 8 ${im.mask.filter}`,im.mask.bytes);}
+      const id=nextId++;
+      stream(id,`/Type /XObject /Subtype /Image /Width ${im.width} /Height ${im.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 ${im.color.filter}${maskId?` /SMask ${maskId} 0 R`:''}`,im.color.bytes);
+      return {id,orientation:1};
+    }
+    // Called only after the renderer has successfully decoded a photograph
+    // which it intends to place as an overlay. The original file becomes part
+    // of the eventual PDF immediately; the seen map itself stores just IDs.
+    async function ensureImage(src,blob){
+      ensureActive();if(busy)throw new Error('Une page PDF est déjà en cours.');
+      if(typeof src!=='string'||!src||!blob||!blob.size)throw new Error('Photo source vide pour le PDF.');
+      if(seen.has(src))return;
+      busy=true;
+      try{const item=await imageObject(blob);ensureActive();seen.set(src,item);}
+      catch(error){state='failed';release();throw error;}
+      finally{busy=false;}
+    }
+    async function addPage(page){
+      ensureActive();if(busy)throw new Error('Une page PDF est déjà en cours.');
+      if(!page||!page.width||!page.height||!page.dataUrl)throw new Error('Page PDF invalide.');
+      busy=true;
+      try{
+        const pageId=nextId++;
+        const bgResponse=await fetch(page.dataUrl);ensureActive();
+        const bgBlob=await bgResponse.blob();ensureActive();
+        const bg=await imageObject(bgBlob);ensureActive();
+        const resources=[`/Bg ${bg.id} 0 R`],commands=[`q ${W} 0 0 ${H} 0 0 cm /Bg Do Q`];
+        for(let j=0;j<(page.overlays||[]).length;j++){
+          const overlay=page.overlays[j];let item=seen.get(overlay.src);
+          if(!item){
+            const blob=await sourceAsBlob(overlay.src);ensureActive();
+            if(!blob||!blob.size)throw new Error('Photo source vide pour le PDF.');
+            item=await imageObject(blob);ensureActive();seen.set(overlay.src,item);
+          }
+          const name=`I${j}`,sx=W/page.width,sy=H/page.height;
+          const x=overlay.x*sx,y=H-(overlay.y+overlay.h)*sy,w=overlay.w*sx,h=overlay.h*sy;
+          resources.push(`/${name} ${item.id} 0 R`);
+          commands.push(`q ${w} 0 0 ${h} ${x} ${y} cm ${matrices[item.orientation-1].join(' ')} cm /${name} Do Q`);
+        }
+        const content=enc.encode(commands.join('\n')),contentId=nextId++;
+        stream(contentId,'',content);
+        object(pageId,()=>add(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${W} ${H}] /Resources << /XObject << ${resources.join(' ')} >> >> /Contents ${contentId} 0 R >>`));
+        pageIds.push(pageId);
+      }catch(error){state='failed';release();throw error;}
+      finally{busy=false;}
+    }
+    async function finish(){
+      ensureActive();if(busy)throw new Error('Une page PDF est déjà en cours.');
+      if(!pageIds.length)throw new Error('Aucune page générée.');
+      try{
+        object(2,()=>add(`<< /Type /Pages /Count ${pageIds.length} /Kids [${pageIds.map(id=>`${id} 0 R`).join(' ')}] >>`));
+        const xref=length;add(`xref\n0 ${nextId}\n0000000000 65535 f \n`);
+        for(let i=1;i<nextId;i++){if(offsets[i]===undefined)throw new Error('PDF incomplet.');add(`${String(offsets[i]).padStart(10,'0')} 00000 n \n`);}
+        add(`trailer\n<< /Size ${nextId} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`);
+        const result=new Blob(chunks,{type:'application/pdf'});state='finished';release();return result;
+      }catch(error){state='failed';release();throw error;}
+    }
+    function abort(){if(state==='active'){state='aborted';release();}}
+    return {ensureImage,addPage,finish,abort};
+  }
+  global.WBPDFWriter={build,createIncremental};
 })(window);

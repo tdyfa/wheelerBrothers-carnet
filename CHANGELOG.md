@@ -1,5 +1,15 @@
 # Historique WB Carnet
 
+## 10.3
+
+- Les photos originales sont intégrées progressivement au PDF pour éviter une partie des relectures, sans cache séparé de 100 photos.
+
+
+## 10.2
+
+- Réutilisation temporaire et bornée de certains originaux pendant la génération PDF.
+
+
 ## 10.1
 
 - La progression des photos et de l’assemblage PDF reste visible sans alternance avec le nombre de pages.

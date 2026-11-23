@@ -103,6 +103,34 @@ async function pdfSourceAsBlob(src){
   return await pdfRemoteBlob(resolvedUrl);
 }
 
+// Keep only a small, generation-scoped budget of original compressed bytes.
+// First admitted sources are not evicted by later ones: the writer sees pages
+// in their original order. Assembly cache misses are never added to this map.
+function createGenerationBlobCache(fetchSource, maxBytes=8*1024*1024, maxEntries=64){
+  const entries=new Map();let retained=0;
+  return {
+    async forPreparation(src){
+      if(entries.has(src))return entries.get(src);
+      const blob=await fetchSource(src);
+      if(blob && Number.isSafeInteger(blob.size) && blob.size>0 && blob.size<=maxBytes-retained && entries.size<maxEntries && !entries.has(src)){
+        entries.set(src,blob);retained+=blob.size;
+      }
+      return blob;
+    },
+    async forAssembly(src){
+      if(entries.has(src)){
+        const blob=entries.get(src);entries.delete(src);retained-=blob.size;return blob;
+      }
+      return fetchSource(src);
+    },
+    drop(src){
+      if(entries.has(src)){retained-=entries.get(src).size;entries.delete(src);}
+    },
+    clear(){entries.clear();retained=0;},
+    stats(){return {entries:entries.size,bytes:retained,maxBytes,maxEntries};}
+  };
+}
+
 function reportPdfFilename(state){
   const clean=value=>String(value||'')
     .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
@@ -210,7 +238,7 @@ function pdfDrawContain(ctx,img,x,y,w,h,{border=false,background='#fff'}={}){
   else ctx.drawImage(img,dx,dy,dw,dh);
 }
 
-async function loadReportPdfImage(src,cache){
+async function loadReportPdfImage(src,cache,sourceAsBlob=pdfSourceAsBlob,invalidateSource=()=>{}){
   if(!src)return null;
   if(cache.has(src))return cache.get(src);
   // A4 pages are rasterised at 1240px wide: avoid decoding dozens of
@@ -226,7 +254,7 @@ async function loadReportPdfImage(src,cache){
     let lastError=null;
     for(let attempt=0;attempt<2;attempt++){
       try{
-        const blob=await pdfSourceAsBlob(src);
+        const blob=await sourceAsBlob(src);
         if(!blob||!blob.size) throw new Error('Image vide');
         if('createImageBitmap' in window){
           try{
@@ -263,12 +291,18 @@ async function loadReportPdfImage(src,cache){
           reduced.width=Math.max(1,Math.round(img.width*scale));
           reduced.height=Math.max(1,Math.round(img.height*scale));
           reduced.getContext('2d').drawImage(img,0,0,reduced.width,reduced.height);
+          // The full-resolution Image is no longer needed once the small
+          // layout canvas is drawn. Release it before embedding a non-JPEG
+          // original, which may itself require a second pixel decode.
+          img.src='';
           reduced.__wbPdfCanvas=true;
           return reduced;
         }finally{
           URL.revokeObjectURL(objectUrl);
         }
       }catch(e){
+        // Do not retry a corrupt/transiently unreadable Blob from the cache.
+        invalidateSource(src);
         lastError=e;
         if(attempt===0) await new Promise(r=>setTimeout(r,250));
       }
@@ -299,7 +333,22 @@ async function renderReportPdfPages(state,options={}){
   const sources=new Set(),seen=new Set();
   const scan=(v,k='')=>{if(!v)return;if(typeof v==='string'&&['src','overview','products','logo','labelR','labelV','baieAvant','baieApres'].includes(k)&&/^(https?:|data:image|blob:)/.test(v))sources.add(v);else if(Array.isArray(v))v.forEach(x=>scan(x));else if(typeof v==='object')Object.entries(v).forEach(([key,x])=>scan(x,key));};
   scan(s);
-  const track=async(src)=>{const img=await loadReportPdfImage(src,imageCache);if(img&&src)reportPdfImageSources.set(img,src);if(src&&!seen.has(src)){seen.add(src);options.onProgress?.('Photos préparées',seen.size,Math.max(seen.size,sources.size),`${seen.size} / ${Math.max(seen.size,sources.size)} images`);}return img;};
+  const track=async(src)=>{
+    // Capture the original used for a successful decode. With the incremental
+    // writer it can be inserted directly into the future PDF; only its object
+    // reference is retained separately, not a second cache of all the photos.
+    let sourceBlob=null;
+    const loader=async(key)=>{sourceBlob=await (options.sourceAsBlob||pdfSourceAsBlob)(key);return sourceBlob;};
+    const img=await loadReportPdfImage(src,imageCache,loader,options.invalidateSource||(()=>{}));
+    if(img&&src){
+      reportPdfImageSources.set(img,src);
+      // pdfDrawContain skips zero-size images, so do not embed an otherwise
+      // invisible original in the resulting PDF either.
+      if(options.onOriginal&&sourceBlob&&img.width&&img.height)await options.onOriginal(src,sourceBlob);
+    }
+    if(src&&!seen.has(src)){seen.add(src);options.onProgress?.('Photos préparées',seen.size,Math.max(seen.size,sources.size),`${seen.size} / ${Math.max(seen.size,sources.size)} images`);}
+    return img;
+  };
   const contentW=REPORT_PDF_W-REPORT_PDF_MARGIN*2;
   const newCanvas=()=>{
     const canvas=document.createElement('canvas');
@@ -582,21 +631,43 @@ async function renderReportPdfPages(state,options={}){
     downloadInProgress=true;
     storage=options.storage||null;
     const imageCache=new Map();
+    let writer=null,originals=null;
     const progress=global.WBProgress?.start('Génération PDF — WB Carnet');
     try{
+    writer=typeof global.WBPDFWriter?.createIncremental==='function'
+      ? global.WBPDFWriter.createIncremental({sourceAsBlob:pdfSourceAsBlob}) : null;
+    // A stale cached writer can still use the previous bounded-cache path.
+    originals=writer ? null : createGenerationBlobCache(pdfSourceAsBlob);
     // Keep a measurable image-preparation bar visible; page composition must
     // not replace it with an indeterminate status after each finished page.
     progress?.update('Photos préparées',0,1,'Chargement des images…');
-    const pages=await renderReportPdfPages(state,{imageCache,onProgress:(...args)=>progress?.update(...args)});
+    const pages=await renderReportPdfPages(state,{
+      imageCache,sourceAsBlob:originals ? originals.forPreparation : pdfSourceAsBlob,
+      invalidateSource:originals ? originals.drop : ()=>{},
+      onOriginal:writer ? (src,blob)=>writer.ensureImage(src,blob) : null,
+      onProgress:(...args)=>progress?.update(...args)
+    });
     if(!pages.length) throw new Error('Aucune page générée');
     progress?.update('Assemblage du fichier PDF',0,pages.length+1,'Finalisation du document…');
     if(!global.WBPDFWriter)throw new Error('Moteur PDF indisponible. Rechargez l’application.');
     // Writer progress counts pages; reserve one final step until build returns
     // so that 100% means the PDF bytes have actually been assembled.
-    const blob=await global.WBPDFWriter.build(pages,{sourceAsBlob:pdfSourceAsBlob,onProgress:(done,total)=>{
-      if(Number.isFinite(done)&&Number.isFinite(total)&&total>0)
-        progress?.update('Assemblage du fichier PDF',Math.min(done,total),total+1,'Finalisation du document…');
-    }});
+    let blob;
+    if(writer){
+      for(let i=0;i<pages.length;i++){
+        await writer.addPage(pages[i]);
+        // Once its background and overlays are registered in the PDF, the
+        // intermediate page data URL no longer needs to remain referenced.
+        pages[i]=null;
+        progress?.update('Assemblage du fichier PDF',i+1,pages.length+1,'Finalisation du document…');
+      }
+      blob=await writer.finish();
+    }else{
+      blob=await global.WBPDFWriter.build(pages,{sourceAsBlob:originals.forAssembly,onProgress:(done,total)=>{
+        if(Number.isFinite(done)&&Number.isFinite(total)&&total>0)
+          progress?.update('Assemblage du fichier PDF',Math.min(done,total),total+1,'Finalisation du document…');
+      }});
+    }
     progress?.update('Assemblage du fichier PDF',1,1,'Document prêt');
     const url=URL.createObjectURL(blob);
     try{
@@ -616,6 +687,8 @@ async function renderReportPdfPages(state,options={}){
         try{const image=await pending;if(image&&typeof image.close==='function')image.close();else if(image&&image.__wbPdfCanvas){image.width=0;image.height=0;}}catch(e){}
       }
       imageCache.clear();
+      if(originals)originals.clear();
+      if(writer)writer.abort();
       progress?.close();
       downloadInProgress=false;
     }

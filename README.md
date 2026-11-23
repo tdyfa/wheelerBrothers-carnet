@@ -1,6 +1,12 @@
 <!--
 HISTORIQUE DES VERSIONS
 
+v10.3
+- Intégration progressive des photos originales au PDF.
+
+v10.2
+- Réutilisation temporaire et bornée de certains originaux lors de la génération PDF.
+
 v10.1
 - Barre de progression maintenue lors de la génération des PDF.
 
